@@ -71,26 +71,8 @@ typedef struct {
     void *item_recap_tts;
     void *item_recap_now;
     void *item_keywords;
-    void *item_recent;
-    void *recent_items[5];
-    char recent_paths[5][512];
-
-    void *lang_items[8];
     void *item_make_mp3;
-    const char *lang_codes[8];
 
-    void *sens_items[3];
-    const char *sens_codes[3];
-
-    size_t mic_items_count;
-    void *mic_items[ASCOLTO_MAX_DEVICES];
-    char mic_names[ASCOLTO_MAX_DEVICES][128];
-
-    size_t sys_items_count;
-    void *sys_items[ASCOLTO_MAX_DEVICES];
-    char sys_names[ASCOLTO_MAX_DEVICES][128];
-
-    size_t built_recent_count;
     bool has_applied;
     ascolto_tray_snapshot_t applied;
     bool updating_widgets;
@@ -249,54 +231,6 @@ static void on_menu_open_session_folder(void *widget, gpointer user_data) {
     if (ui) ascolto_tray_open_session_folder(ui);
 }
 
-static void on_menu_set_lang(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *lang = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-lang");
-    if (lang) {
-        ascolto_core_set_language(ui->core, lang);
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
-}
-
-static void on_menu_set_mic(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *dev = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-dev");
-    if (dev) {
-        ascolto_core_set_mic_device(ui->core, dev);
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
-}
-
-static void on_menu_set_sys(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *dev = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-dev");
-    if (dev) {
-        ascolto_core_set_sys_device(ui->core, dev);
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
-}
-
-static void on_menu_set_sens(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *sens_str = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-sens");
-    if (sens_str) {
-        ascolto_core_set_sensitivity(ui->core, ascolto_sensitivity_from_string(sens_str));
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
-}
-
 static void *keywords_dialog_worker(void *arg) {
     ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)arg;
     gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
@@ -346,18 +280,6 @@ static void on_menu_keywords_dialog(void *widget, gpointer user_data) {
     }
 }
 
-static void on_menu_open_recent_file(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    for (size_t i = 0; i < 5; i++) {
-        if (p->recent_items[i] == widget && p->recent_paths[i][0] != '\0') {
-            launch_path_nonblocking(p->recent_paths[i], false);
-            break;
-        }
-    }
-}
-
 static void on_menu_open_folder(void *widget, gpointer user_data) {
     (void)widget;
     ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
@@ -371,30 +293,6 @@ static void on_menu_quit(void *widget, gpointer user_data) {
     if (ui && ui->core) {
         ui->core->running = false;
     }
-}
-
-static void rebuild_recent_submenu(ascolto_tray_ui_t *ui, gtk_tray_priv_t *p, const ascolto_tray_snapshot_t *s) {
-    (void)ui;
-    for (size_t slot = 0; slot < 5; slot++) {
-        if (!p->recent_items[slot]) continue;
-        if (slot < s->recent_files_count) {
-            size_t src_idx = s->recent_files_count - 1 - slot;
-            const char *full = s->recent_files[src_idx];
-            const char *base = strrchr(full, '/');
-            base = base ? (base + 1) : full;
-            snprintf(p->recent_paths[slot], sizeof(p->recent_paths[slot]), "%s", full);
-            p->gtk_menu_item_set_label(p->recent_items[slot], base);
-            p->gtk_widget_set_sensitive(p->recent_items[slot], TRUE);
-        } else {
-            p->recent_paths[slot][0] = '\0';
-            p->gtk_menu_item_set_label(p->recent_items[slot],
-                                       (slot == 0 && s->recent_files_count == 0)
-                                           ? "(Nessuna trascrizione recente)"
-                                           : "-");
-            p->gtk_widget_set_sensitive(p->recent_items[slot], FALSE);
-        }
-    }
-    p->built_recent_count = s->recent_files_count;
 }
 
 static bool init_gtk_indicator(ascolto_tray_ui_t *ui) {
@@ -499,102 +397,12 @@ static bool init_gtk_indicator(ascolto_tray_ui_t *ui) {
 
     p->gtk_menu_shell_append(p->menu, p->gtk_separator_menu_item_new());
 
-    /* Language submenu with checkmarks */
-    void *item_lang = p->gtk_menu_item_new_with_label("Lingua di trascrizione");
-    void *sub_lang = p->gtk_menu_new();
-    static const char *langs[8][2] = {
-        {"auto", "Rilevamento automatico (Auto)"},
-        {"it", "Italiano (it)"},
-        {"en", "English (en)"},
-        {"es", "Espanol (es)"},
-        {"fr", "Francais (fr)"},
-        {"de", "Deutsch (de)"},
-        {"nl", "Nederlands (nl)"},
-        {"pl", "Polski (pl)"}
-    };
-    for (size_t i = 0; i < 8; i++) {
-        void *li = p->gtk_check_menu_item_new_with_label(langs[i][1]);
-        p->lang_items[i] = li;
-        p->lang_codes[i] = langs[i][0];
-        g_object_set_data(G_OBJECT(li), "ascolto-lang", (gpointer)langs[i][0]);
-        g_signal_connect_data(li, "toggled", G_CALLBACK(on_menu_set_lang), ui, NULL, 0);
-        p->gtk_menu_shell_append(sub_lang, li);
-    }
-    p->gtk_menu_item_set_submenu(item_lang, sub_lang);
-    p->gtk_menu_shell_append(p->menu, item_lang);
-
-    /* Devices submenus (MIC & SYS) with checkmarks */
-    ascolto_device_info_t devs[ASCOLTO_MAX_DEVICES];
-    size_t dev_count = 0;
-    ui->core->audio.list_devices(&ui->core->audio, devs, ASCOLTO_MAX_DEVICES, &dev_count);
-
-    void *item_mic = p->gtk_menu_item_new_with_label("Dispositivo Microfono (MIC)");
-    void *sub_mic = p->gtk_menu_new();
-    void *item_sys = p->gtk_menu_item_new_with_label("Audio di Sistema (SYS)");
-    void *sub_sys = p->gtk_menu_new();
-
-    for (size_t i = 0; i < dev_count; i++) {
-        void *di = p->gtk_check_menu_item_new_with_label(devs[i].description);
-        g_object_set_data_full(G_OBJECT(di), "ascolto-dev", g_strdup(devs[i].name), g_free);
-        if (devs[i].is_monitor) {
-            size_t idx = p->sys_items_count++;
-            p->sys_items[idx] = di;
-            snprintf(p->sys_names[idx], sizeof(p->sys_names[idx]), "%s", devs[i].name);
-            g_signal_connect_data(di, "toggled", G_CALLBACK(on_menu_set_sys), ui, NULL, 0);
-            p->gtk_menu_shell_append(sub_sys, di);
-        } else {
-            size_t idx = p->mic_items_count++;
-            p->mic_items[idx] = di;
-            snprintf(p->mic_names[idx], sizeof(p->mic_names[idx]), "%s", devs[i].name);
-            g_signal_connect_data(di, "toggled", G_CALLBACK(on_menu_set_mic), ui, NULL, 0);
-            p->gtk_menu_shell_append(sub_mic, di);
-        }
-    }
-    p->gtk_menu_item_set_submenu(item_mic, sub_mic);
-    p->gtk_menu_shell_append(p->menu, item_mic);
-    p->gtk_menu_item_set_submenu(item_sys, sub_sys);
-    p->gtk_menu_shell_append(p->menu, item_sys);
-
-    /* Speaker diarization sensitivity submenu with checkmarks */
-    void *item_sens = p->gtk_menu_item_new_with_label("Sensibilita riconoscimento interlocutori");
-    void *sub_sens = p->gtk_menu_new();
-    static const char *sens_opts[3][2] = {
-        {"low", "Bassa (meno speaker)"},
-        {"medium", "Media (bilanciata)"},
-        {"high", "Alta (distingue voci simili)"}
-    };
-    for (size_t i = 0; i < 3; i++) {
-        void *si = p->gtk_check_menu_item_new_with_label(sens_opts[i][1]);
-        p->sens_items[i] = si;
-        p->sens_codes[i] = sens_opts[i][0];
-        g_object_set_data(G_OBJECT(si), "ascolto-sens", (gpointer)sens_opts[i][0]);
-        g_signal_connect_data(si, "toggled", G_CALLBACK(on_menu_set_sens), ui, NULL, 0);
-        p->gtk_menu_shell_append(sub_sens, si);
-    }
-    p->gtk_menu_item_set_submenu(item_sens, sub_sens);
-    p->gtk_menu_shell_append(p->menu, item_sens);
-
     /* Keywords dialog item */
     p->item_keywords = p->gtk_menu_item_new_with_label("Keywords personalizzate...");
     g_signal_connect_data(p->item_keywords, "activate", G_CALLBACK(on_menu_keywords_dialog), ui, NULL, 0);
     p->gtk_menu_shell_append(p->menu, p->item_keywords);
 
     p->gtk_menu_shell_append(p->menu, p->gtk_separator_menu_item_new());
-
-    /* Recent transcripts submenu (5 pre-allocated slots updated in place) */
-    p->item_recent = p->gtk_menu_item_new_with_label("Trascrizioni recenti");
-    void *sub_recent = p->gtk_menu_new();
-    for (size_t i = 0; i < 5; i++) {
-        void *ri = p->gtk_menu_item_new_with_label("-");
-        p->gtk_widget_set_sensitive(ri, FALSE);
-        p->recent_items[i] = ri;
-        p->recent_paths[i][0] = '\0';
-        g_signal_connect_data(ri, "activate", G_CALLBACK(on_menu_open_recent_file), ui, NULL, 0);
-        p->gtk_menu_shell_append(sub_recent, ri);
-    }
-    p->gtk_menu_item_set_submenu(p->item_recent, sub_recent);
-    p->built_recent_count = (size_t)-1;
-    p->gtk_menu_shell_append(p->menu, p->item_recent);
 
     /* Open transcripts folder */
     void *item_open = p->gtk_menu_item_new_with_label("Apri cartella trascrizioni");
@@ -672,38 +480,6 @@ static void apply_snapshot_to_gtk_main_thread(ascolto_tray_ui_t *ui) {
     if (first || snap.menu_recap_tts_checked != p->applied.menu_recap_tts_checked) {
         p->gtk_check_menu_item_set_active(p->item_recap_tts,
                                           snap.menu_recap_tts_checked ? TRUE : FALSE);
-    }
-    if (first || strcmp(snap.selected_language, p->applied.selected_language) != 0) {
-        for (size_t i = 0; i < 8; i++) {
-            if (p->lang_items[i]) {
-                p->gtk_check_menu_item_set_active(p->lang_items[i],
-                                                  strcmp(snap.selected_language, p->lang_codes[i]) == 0 ? TRUE : FALSE);
-            }
-        }
-    }
-    if (first || snap.selected_sensitivity != p->applied.selected_sensitivity) {
-        const char *sens_code = ascolto_sensitivity_to_string(snap.selected_sensitivity);
-        for (size_t i = 0; i < 3; i++) {
-            if (p->sens_items[i]) {
-                p->gtk_check_menu_item_set_active(p->sens_items[i],
-                                                  strcmp(sens_code, p->sens_codes[i]) == 0 ? TRUE : FALSE);
-            }
-        }
-    }
-    if (first || strcmp(snap.selected_mic, p->applied.selected_mic) != 0) {
-        for (size_t i = 0; i < p->mic_items_count; i++) {
-            p->gtk_check_menu_item_set_active(p->mic_items[i],
-                                              strcmp(snap.selected_mic, p->mic_names[i]) == 0 ? TRUE : FALSE);
-        }
-    }
-    if (first || strcmp(snap.selected_sys, p->applied.selected_sys) != 0) {
-        for (size_t i = 0; i < p->sys_items_count; i++) {
-            p->gtk_check_menu_item_set_active(p->sys_items[i],
-                                              strcmp(snap.selected_sys, p->sys_names[i]) == 0 ? TRUE : FALSE);
-        }
-    }
-    if (first || p->built_recent_count != snap.recent_files_count) {
-        rebuild_recent_submenu(ui, p, &snap);
     }
     if (first || strcmp(snap.keywords_summary, p->applied.keywords_summary) != 0) {
         char kw_lbl[320];
