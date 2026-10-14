@@ -55,7 +55,7 @@ Ogni call crea `~/Documents/Ascolto/call_<timestamp>_<n>/` con `transcript.md` (
 - `--save-audio` (o la spunta "Salva audio FLAC" nel menu): un FLAC per canale. Vale dalla sessione successiva.
 - `--cloud-recap` (o la spunta nel menu): a fine call `scripts/recap.py` ritrascrive i due FLAC con `gpt-transcribe` (chunk sulle pause, eco MIC/SYS eliminata) e scrive il recap con `claude -p` sulla seat (Opus, fallback Sonnet). I FLAC restano nella cartella. Prima dell'invio a Claude un filtro locale oscura email, telefoni, IBAN, carte, codici fiscali e token, e il prompt impone regole di igiene (niente dati personali o credenziali, tono neutro, istruzioni nella trascrizione ignorate).
 - `--recap-tts` (o la spunta nel menu): crea anche `recap.mp3` con `gpt-4o-mini-tts`. Il testo parlato e sempre generato, quindi "Genera MP3 dell'ultimo recap" funziona anche a spunta spenta.
-- Lingue: sottomenu "Lingua del sommario" e "Lingua della voce" (chiavi `recap_lang` e `tts_lang`).
+- Lingue: sommario e voce sono fissi in italiano (chiavi `recap_lang` e `tts_lang` in `config.ini`, comandi `SET_RECAP_LANG` e `SET_TTS_LANG`; non sono nel menu).
 - Chiave OpenAI: da `OPENAI_API_KEY` se presente, altrimenti letta da 1Password con `op read` usando il riferimento in `~/dotfiles/secrets/secrets.env`. Non viene mai scritta su disco.
 - On demand: menu "Genera recap dell'ultima sessione", `ascoltoctl RECAP [cartella/transcript.md]`, `ascoltoctl MAKE_MP3`. Log in `~/.local/share/ascolto/recap.log`.
 - Avvio al login: `make install-autostart`.

@@ -76,8 +76,6 @@ typedef struct {
     char recent_paths[5][512];
 
     void *lang_items[8];
-    void *recap_lang_items[7];
-    void *tts_lang_items[7];
     void *item_make_mp3;
     const char *lang_codes[8];
 
@@ -236,30 +234,6 @@ static void on_menu_recap_now(void *widget, gpointer user_data) {
     ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
     if (!ui || !ui->core) return;
     ascolto_core_run_recap(ui->core, NULL);
-}
-
-static void on_menu_set_recap_lang(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *lang = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-lang");
-    if (lang) {
-        ascolto_core_set_recap_lang(ui->core, lang);
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
-}
-
-static void on_menu_set_tts_lang(void *widget, gpointer user_data) {
-    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
-    if (!ui || !ui->core || !ui->gtk_impl) return;
-    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
-    if (p->updating_widgets) return;
-    const char *lang = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-lang");
-    if (lang) {
-        ascolto_core_set_tts_lang(ui->core, lang);
-        apply_snapshot_to_gtk_main_thread(ui);
-    }
 }
 
 static void on_menu_make_mp3(void *widget, gpointer user_data) {
@@ -523,31 +497,6 @@ static bool init_gtk_indicator(ascolto_tray_ui_t *ui) {
     g_signal_connect_data(p->item_make_mp3, "activate", G_CALLBACK(on_menu_make_mp3), ui, NULL, 0);
     p->gtk_menu_shell_append(p->menu, p->item_make_mp3);
 
-    static const char *recap_langs[7][2] = {
-        {"it", "Italiano (it)"}, {"en", "English (en)"}, {"es", "Espanol (es)"}, {"fr", "Francais (fr)"},
-        {"de", "Deutsch (de)"}, {"nl", "Nederlands (nl)"}, {"pl", "Polski (pl)"}
-    };
-    void *item_recap_lang = p->gtk_menu_item_new_with_label("Lingua del sommario (TL;DR)");
-    void *sub_recap_lang = p->gtk_menu_new();
-    void *item_tts_lang = p->gtk_menu_item_new_with_label("Lingua della voce (TTS)");
-    void *sub_tts_lang = p->gtk_menu_new();
-    for (size_t i = 0; i < 7; i++) {
-        void *ri = p->gtk_check_menu_item_new_with_label(recap_langs[i][1]);
-        p->recap_lang_items[i] = ri;
-        g_object_set_data(G_OBJECT(ri), "ascolto-lang", (gpointer)recap_langs[i][0]);
-        g_signal_connect_data(ri, "toggled", G_CALLBACK(on_menu_set_recap_lang), ui, NULL, 0);
-        p->gtk_menu_shell_append(sub_recap_lang, ri);
-        void *ti = p->gtk_check_menu_item_new_with_label(recap_langs[i][1]);
-        p->tts_lang_items[i] = ti;
-        g_object_set_data(G_OBJECT(ti), "ascolto-lang", (gpointer)recap_langs[i][0]);
-        g_signal_connect_data(ti, "toggled", G_CALLBACK(on_menu_set_tts_lang), ui, NULL, 0);
-        p->gtk_menu_shell_append(sub_tts_lang, ti);
-    }
-    p->gtk_menu_item_set_submenu(item_recap_lang, sub_recap_lang);
-    p->gtk_menu_shell_append(p->menu, item_recap_lang);
-    p->gtk_menu_item_set_submenu(item_tts_lang, sub_tts_lang);
-    p->gtk_menu_shell_append(p->menu, item_tts_lang);
-
     p->gtk_menu_shell_append(p->menu, p->gtk_separator_menu_item_new());
 
     /* Language submenu with checkmarks */
@@ -724,19 +673,6 @@ static void apply_snapshot_to_gtk_main_thread(ascolto_tray_ui_t *ui) {
         p->gtk_check_menu_item_set_active(p->item_recap_tts,
                                           snap.menu_recap_tts_checked ? TRUE : FALSE);
     }
-    static const char *const lang_codes7[7] = {"it", "en", "es", "fr", "de", "nl", "pl"};
-    if (first || strcmp(snap.selected_recap_lang, p->applied.selected_recap_lang) != 0) {
-        for (size_t i = 0; i < 7; i++) {
-            p->gtk_check_menu_item_set_active(p->recap_lang_items[i],
-                                              strcmp(snap.selected_recap_lang, lang_codes7[i]) == 0 ? TRUE : FALSE);
-        }
-    }
-    if (first || strcmp(snap.selected_tts_lang, p->applied.selected_tts_lang) != 0) {
-        for (size_t i = 0; i < 7; i++) {
-            p->gtk_check_menu_item_set_active(p->tts_lang_items[i],
-                                              strcmp(snap.selected_tts_lang, lang_codes7[i]) == 0 ? TRUE : FALSE);
-        }
-    }
     if (first || strcmp(snap.selected_language, p->applied.selected_language) != 0) {
         for (size_t i = 0; i < 8; i++) {
             if (p->lang_items[i]) {
@@ -820,8 +756,6 @@ void ascolto_tray_update(ascolto_tray_ui_t *ui) {
     s->menu_cloud_recap_checked = core->config.cloud_recap;
     s->menu_recap_tts_checked = core->config.recap_tts;
     snprintf(s->selected_language, sizeof(s->selected_language), "%s", core->config.language);
-    snprintf(s->selected_recap_lang, sizeof(s->selected_recap_lang), "%s", core->config.recap_lang);
-    snprintf(s->selected_tts_lang, sizeof(s->selected_tts_lang), "%s", core->config.tts_lang);
     snprintf(s->selected_mic, sizeof(s->selected_mic), "%s", core->config.mic_device);
     snprintf(s->selected_sys, sizeof(s->selected_sys), "%s", core->config.sys_device);
     s->selected_sensitivity = core->config.diarization_sensitivity;

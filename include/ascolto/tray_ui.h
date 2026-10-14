@@ -23,8 +23,6 @@ typedef struct {
     bool menu_cloud_recap_checked;
     bool menu_recap_tts_checked;
     char selected_language[16];
-    char selected_recap_lang[8];
-    char selected_tts_lang[8];
     char selected_mic[128];
     char selected_sys[128];
     ascolto_sensitivity_t selected_sensitivity;

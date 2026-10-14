@@ -4,7 +4,7 @@ GLIB_FLAGS := $(shell $(PKG_CFG) --cflags json-glib-1.0 gio-2.0 gobject-2.0 glib
 GLIB_LIBS  := $(shell $(PKG_CFG) --libs json-glib-1.0 gio-2.0 gobject-2.0 glib-2.0)
 AV_FLAGS   := $(shell $(PKG_CFG) --cflags libavformat libavcodec libavutil)
 AV_LIBS    := $(shell $(PKG_CFG) --libs libavformat libavcodec libavutil)
-CFLAGS   := -std=c11 -Wall -Wextra -O2 -g -Iinclude -Ithird_party/whistle $(GLIB_FLAGS) $(AV_FLAGS)
+CFLAGS   := -std=c11 -Wall -Wextra -O2 -g -MMD -MP -Iinclude -Ithird_party/whistle $(GLIB_FLAGS) $(AV_FLAGS)
 LDFLAGS  := third_party/whistle/libneedle.so -Wl,-rpath,'$$ORIGIN/../third_party/whistle' $(GLIB_LIBS) $(AV_LIBS) -ldl -lpthread -lm
 
 CORE_SRCS := \
@@ -25,6 +25,8 @@ all: deps bin/ascolto bin/ascoltoctl bin/flac2wav bin/test_harness
 
 deps:
 	@./scripts/fetch_whistle.sh
+
+-include $(CORE_OBJS:.o=.d)
 
 build/%.o: src/%.c
 	@mkdir -p build
