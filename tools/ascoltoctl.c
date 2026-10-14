@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -30,7 +31,7 @@ int main(int argc, char **argv) {
         printf("Usage: %s [-s <socket_path>] <COMMAND> [ARGS...]\n\n"
                "Commands:\n"
                "  STATUS\n"
-               "  START | STOP | PAUSE | RESUME\n"
+               "  START | STOP | TOGGLE | PAUSE | RESUME\n"
                "  SET_AUTO_MIC <0|1>\n"
                "  SET_LANG <auto|it|en|es|fr|de|nl|pl>\n"
                "  SET_MIC <device_name>\n"
@@ -58,6 +59,12 @@ int main(int argc, char **argv) {
         perror("socket");
         return 1;
     }
+
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));

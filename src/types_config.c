@@ -88,7 +88,7 @@ void ascolto_config_init_defaults(ascolto_config_t *cfg) {
     const char *home = getenv("HOME");
     if (!home || !*home) home = "/tmp";
 
-    snprintf(cfg->output_dir, sizeof(cfg->output_dir), "%s/.local/share/ascolto/transcripts", home);
+    snprintf(cfg->output_dir, sizeof(cfg->output_dir), "%s/Documents/Ascolto", home);
     snprintf(cfg->config_path, sizeof(cfg->config_path), "%s/.config/ascolto/config.ini", home);
     snprintf(cfg->weights_path, sizeof(cfg->weights_path), "third_party/whistle/whistle.cact");
 

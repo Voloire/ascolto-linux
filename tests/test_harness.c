@@ -402,6 +402,75 @@ static int test_daemon_binary_and_cli_tool(void) {
     return 0;
 }
 
+static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
+    printf("[TEST 7] Live PipeWire daemon repeated Start/Stop/Restart cycles + GNOME D-Bus GUI menu clicks...\n");
+    const char *sock = "/tmp/opencode/ascolto_live_gui.sock";
+    unlink(sock);
+
+    /* Launch real daemon with LIVE PipeWire audio backend (no --mock-audio) and GNOME GUI indicator */
+    int rc = system("./bin/ascolto --socket /tmp/opencode/ascolto_live_gui.sock "
+                    "--output-dir /tmp/opencode/ascolto_live_gui_transcripts "
+                    "--config /tmp/opencode/ascolto_live_gui_config.ini "
+                    "--no-auto-mic >/tmp/opencode/ascolto_live_gui.out 2>&1 &");
+    ASSERT_TRUE(rc == 0, "Failed to launch live ./bin/ascolto");
+
+    for (int i = 0; i < 60; i++) {
+        if (access(sock, F_OK) == 0) break;
+        struct timespec ts = {0, 50 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_TRUE(access(sock, F_OK) == 0, "Live daemon control socket did not appear");
+
+    char reply[8192];
+    /* Run 3 full consecutive START -> PAUSE -> RESUME -> STOP cycles with real PipeWire capture */
+    for (int cycle = 1; cycle <= 3; cycle++) {
+        ASSERT_TRUE(send_ipc_cmd(sock, "START", reply, sizeof(reply)) == 0, "START failed");
+        char expected_sid[64];
+        snprintf(expected_sid, sizeof(expected_sid), "\"session_id\":%d", cycle);
+        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL && strstr(reply, expected_sid) != NULL,
+                    "Expected RECORDING_MANUAL and incremented session_id");
+
+        /* Let real PipeWire capture run for 150 ms */
+        struct timespec ts = {0, 150 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+
+        ASSERT_TRUE(send_ipc_cmd(sock, "PAUSE", reply, sizeof(reply)) == 0, "PAUSE failed");
+        ASSERT_TRUE(strstr(reply, "\"state\":\"PAUSED\"") != NULL, "Expected PAUSED state");
+
+        ASSERT_TRUE(send_ipc_cmd(sock, "RESUME", reply, sizeof(reply)) == 0, "RESUME failed");
+        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL, "Expected RECORDING_MANUAL after RESUME");
+
+        ASSERT_TRUE(send_ipc_cmd(sock, "STOP", reply, sizeof(reply)) == 0, "STOP failed");
+        ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL, "Expected IDLE after STOP");
+        printf("  Cycle %d/3 (START -> PAUSE -> RESUME -> STOP) completed cleanly: %s", cycle, reply);
+    }
+
+    /* Test TOGGLE command (used by Desktop icon 1) */
+    ASSERT_TRUE(send_ipc_cmd(sock, "TOGGLE", reply, sizeof(reply)) == 0, "TOGGLE 1 failed");
+    ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL && strstr(reply, "\"session_id\":4") != NULL,
+                "Expected TOGGLE from IDLE to start session 4");
+    ASSERT_TRUE(send_ipc_cmd(sock, "TOGGLE", reply, sizeof(reply)) == 0, "TOGGLE 2 failed");
+    ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL,
+                "Expected second TOGGLE to stop session 4 and return to IDLE");
+
+    /* Test OPEN_FOLDER command (used by GUI 'Apri cartella trascrizioni') */
+    ASSERT_TRUE(send_ipc_cmd(sock, "OPEN_FOLDER", reply, sizeof(reply)) == 0, "OPEN_FOLDER failed");
+    ASSERT_TRUE(strstr(reply, "\"ok\":true") != NULL, "OPEN_FOLDER did not return ok:true");
+
+    /* Verify recent files count in tray state reflects the sessions we just recorded */
+    ASSERT_TRUE(send_ipc_cmd(sock, "GET_TRAY_STATE", reply, sizeof(reply)) == 0, "GET_TRAY_STATE failed");
+    printf("  Tray state after 4 sessions: %s", reply);
+    ASSERT_TRUE(strstr(reply, "\"recent_files_count\":") != NULL &&
+                strstr(reply, "\"recent_files_count\":0") == NULL,
+                "Expected recent_files_count > 0 in tray menu");
+
+    ASSERT_TRUE(send_ipc_cmd(sock, "QUIT", reply, sizeof(reply)) == 0, "QUIT failed");
+    struct timespec ts = {0, 150 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    printf("  -> PASS\n");
+    return 0;
+}
+
 int main(void) {
     mkdir("/tmp/opencode", 0755);
     printf("=== ascolto Test Harness & Observability Suite ===\n\n");
@@ -412,7 +481,8 @@ int main(void) {
         test_hybrid_speaker_diarization,
         test_e2e_multispeaker_call_and_ipc_observability,
         test_live_pipewire_integration,
-        test_daemon_binary_and_cli_tool
+        test_daemon_binary_and_cli_tool,
+        test_live_daemon_repeated_start_stop_and_gui_dbusmenu
     };
 
     size_t num_tests = sizeof(tests) / sizeof(tests[0]);

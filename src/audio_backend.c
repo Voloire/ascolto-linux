@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <json-glib/json-glib.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +18,7 @@ typedef struct {
     ascolto_channel_t channel;
     char target_dev[128];
     bool is_sys_monitor;
-    bool running;
+    volatile bool running;
     pid_t child_pid;
     int stdout_fd;
     pthread_t thread;
@@ -25,12 +26,13 @@ typedef struct {
 
 typedef struct {
     ascolto_audio_backend_t *parent;
-    bool watcher_running;
+    volatile bool watcher_running;
     pthread_t watcher_thread;
     bool last_mic_state;
     char last_app_name[128];
 
     bool capture_running;
+    pthread_mutex_t cap_mutex;
     pw_stream_worker_t mic_worker;
     pw_stream_worker_t sys_worker;
 } pw_backend_impl_t;
@@ -105,9 +107,12 @@ bool ascolto_pipewire_check_mic_active(char *out_app_name, size_t app_name_cap) 
 
             const char *app_name = json_object_get_string_member_with_default(props, "application.name", "");
             const char *node_name = json_object_get_string_member_with_default(props, "node.name", "");
+            const char *proc_bin = json_object_get_string_member_with_default(props, "application.process.binary", "");
 
-            /* Ignore ascolto's own streams and desktop volume meters */
+            /* Ignore ascolto's own streams, pw-record helpers, and desktop volume meters */
             if (strstr(app_name, "ascolto") != NULL || strstr(node_name, "ascolto") != NULL) continue;
+            if (strstr(app_name, "pw-record") != NULL || strstr(node_name, "pw-record") != NULL ||
+                strstr(proc_bin, "pw-record") != NULL) continue;
             if (strstr(app_name, "Volume Control") != NULL || strstr(app_name, "gnome-control-center") != NULL) continue;
 
             /* Ignore streams that explicitly capture a sink monitor rather than a microphone */
@@ -141,7 +146,6 @@ int ascolto_pipewire_enumerate_devices(ascolto_device_info_t *out_devs, size_t m
     if (!out_devs || max_devs == 0 || !out_count) return -1;
     *out_count = 0;
 
-    /* Always add default MIC and default SYS monitor first */
     if (*out_count < max_devs) {
         ascolto_device_info_t *d = &out_devs[(*out_count)++];
         memset(d, 0, sizeof(*d));
@@ -224,7 +228,6 @@ static void *pw_watcher_loop(void *arg) {
                 impl->parent->on_mic_trigger(impl->parent->cb_user_data, active, app);
             }
         }
-        /* Sleep 250 ms between PipeWire graph inspections */
         for (int i = 0; i < 5 && impl->watcher_running; i++) {
             struct timespec ts = {0, 50 * 1000 * 1000};
             nanosleep(&ts, NULL);
@@ -244,16 +247,28 @@ static void *pw_capture_worker_loop(void *arg) {
         size_t got = 0;
         unsigned char *ptr = (unsigned char *)buf;
         while (w->running && got < bytes_needed) {
+            struct pollfd pfd;
+            pfd.fd = w->stdout_fd;
+            pfd.events = POLLIN | POLLHUP | POLLERR;
+            pfd.revents = 0;
+            int prc = poll(&pfd, 1, 40);
+            if (!w->running) break;
+            if (prc == 0) continue;
+            if (prc < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
             ssize_t r = read(w->stdout_fd, ptr + got, bytes_needed - got);
             if (r > 0) {
                 got += (size_t)r;
             } else if (r == 0) {
                 break;
             } else {
-                if (errno == EINTR) continue;
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
                 break;
             }
         }
+        if (!w->running) break;
         if (got >= sizeof(float) && w->parent->on_chunk) {
             size_t samples = got / sizeof(float);
             w->parent->on_chunk(w->parent->cb_user_data, w->channel, buf, samples, stream_sec, NULL);
@@ -292,6 +307,12 @@ static int start_pw_stream_worker(pw_stream_worker_t *w, ascolto_audio_backend_t
             dup2(devnull, STDERR_FILENO);
             close(devnull);
         }
+        /* Close all inherited file descriptors >= 3 so pw-record never holds sockets/files open */
+        long maxfd = sysconf(_SC_OPEN_MAX);
+        if (maxfd < 0 || maxfd > 1024) maxfd = 1024;
+        for (int fd = 3; fd < (int)maxfd; fd++) {
+            close(fd);
+        }
 
         char props[256];
         if (is_sys_monitor) {
@@ -318,6 +339,7 @@ static int start_pw_stream_worker(pw_stream_worker_t *w, ascolto_audio_backend_t
     }
 
     close(pipefd[1]);
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
     w->child_pid = pid;
     w->stdout_fd = pipefd[0];
     w->running = true;
@@ -329,17 +351,18 @@ static void stop_pw_stream_worker(pw_stream_worker_t *w) {
     if (!w) return;
     w->running = false;
     if (w->child_pid > 0) {
-        kill(w->child_pid, SIGTERM);
-    }
-    if (w->stdout_fd >= 0) {
-        close(w->stdout_fd);
-        w->stdout_fd = -1;
+        /* Immediately terminate pw-record so the write end of stdout pipe closes and unblocks read() */
+        kill(w->child_pid, SIGKILL);
     }
     if (w->child_pid > 0) {
         pthread_join(w->thread, NULL);
         int status = 0;
         waitpid(w->child_pid, &status, 0);
         w->child_pid = -1;
+    }
+    if (w->stdout_fd >= 0) {
+        close(w->stdout_fd);
+        w->stdout_fd = -1;
     }
 }
 
@@ -369,25 +392,34 @@ static void backend_stop_watcher(ascolto_audio_backend_t *b) {
 static int backend_start_capture(ascolto_audio_backend_t *b, const char *mic_dev, const char *sys_dev) {
     if (!b || !b->impl) return -1;
     pw_backend_impl_t *impl = (pw_backend_impl_t *)b->impl;
-    if (impl->capture_running) return 0;
-    impl->capture_running = true;
-    if (b->use_mock) {
+    pthread_mutex_lock(&impl->cap_mutex);
+    if (impl->capture_running) {
+        pthread_mutex_unlock(&impl->cap_mutex);
         return 0;
     }
-    start_pw_stream_worker(&impl->mic_worker, b, ASCOLTO_CHANNEL_MIC, mic_dev, false);
-    start_pw_stream_worker(&impl->sys_worker, b, ASCOLTO_CHANNEL_SYS, sys_dev, true);
+    impl->capture_running = true;
+    if (!b->use_mock) {
+        start_pw_stream_worker(&impl->mic_worker, b, ASCOLTO_CHANNEL_MIC, mic_dev, false);
+        start_pw_stream_worker(&impl->sys_worker, b, ASCOLTO_CHANNEL_SYS, sys_dev, true);
+    }
+    pthread_mutex_unlock(&impl->cap_mutex);
     return 0;
 }
 
 static void backend_stop_capture(ascolto_audio_backend_t *b) {
     if (!b || !b->impl) return;
     pw_backend_impl_t *impl = (pw_backend_impl_t *)b->impl;
-    if (!impl->capture_running) return;
+    pthread_mutex_lock(&impl->cap_mutex);
+    if (!impl->capture_running) {
+        pthread_mutex_unlock(&impl->cap_mutex);
+        return;
+    }
     impl->capture_running = false;
     if (!b->use_mock) {
         stop_pw_stream_worker(&impl->mic_worker);
         stop_pw_stream_worker(&impl->sys_worker);
     }
+    pthread_mutex_unlock(&impl->cap_mutex);
 }
 
 static int backend_list_devices(ascolto_audio_backend_t *b, ascolto_device_info_t *out_devs, size_t max_devs, size_t *out_count) {
@@ -437,8 +469,10 @@ static int backend_list_devices(ascolto_audio_backend_t *b, ascolto_device_info_
 
 static void backend_destroy(ascolto_audio_backend_t *b) {
     if (!b || !b->impl) return;
+    pw_backend_impl_t *impl = (pw_backend_impl_t *)b->impl;
     backend_stop_capture(b);
     backend_stop_watcher(b);
+    pthread_mutex_destroy(&impl->cap_mutex);
     free(b->impl);
     b->impl = NULL;
 }
@@ -455,6 +489,7 @@ int ascolto_audio_backend_create(
     pw_backend_impl_t *impl = (pw_backend_impl_t *)calloc(1, sizeof(pw_backend_impl_t));
     if (!impl) return -1;
     impl->parent = b;
+    pthread_mutex_init(&impl->cap_mutex, NULL);
 
     b->impl = impl;
     b->use_mock = use_mock;

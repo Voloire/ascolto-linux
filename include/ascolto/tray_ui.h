@@ -32,6 +32,7 @@ typedef struct {
     ascolto_core_t *core;
     bool headless;
     bool running;
+    volatile bool dirty;
     void *gtk_impl;
     pthread_mutex_t mutex;
     ascolto_tray_snapshot_t snapshot;
@@ -41,6 +42,7 @@ int ascolto_tray_init(ascolto_tray_ui_t *ui, ascolto_core_t *core, bool headless
 void ascolto_tray_update(ascolto_tray_ui_t *ui);
 void ascolto_tray_get_snapshot(ascolto_tray_ui_t *ui, ascolto_tray_snapshot_t *out_snap);
 void ascolto_tray_step_iteration(ascolto_tray_ui_t *ui);
+void ascolto_tray_open_transcripts_folder(ascolto_tray_ui_t *ui);
 void ascolto_tray_destroy(ascolto_tray_ui_t *ui);
 
 #ifdef __cplusplus

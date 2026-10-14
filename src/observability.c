@@ -3,6 +3,7 @@
 #include "ascolto/core.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,22 +89,24 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
     }
 
     if (strcasecmp(buf, "STATUS") == 0) {
-        char kw_esc[512], md_esc[512], jl_esc[512], app_esc[256];
+        char kw_esc[512], md_esc[512], jl_esc[512], app_esc[256], outdir_esc[512];
         pthread_mutex_lock(&core->mutex);
         json_escape(core->config.keywords, kw_esc, sizeof(kw_esc));
         json_escape(core->current_md_path, md_esc, sizeof(md_esc));
         json_escape(core->current_jsonl_path, jl_esc, sizeof(jl_esc));
         json_escape(core->active_mic_app, app_esc, sizeof(app_esc));
+        json_escape(core->config.output_dir, outdir_esc, sizeof(outdir_esc));
         uint64_t elapsed = ascolto_core_elapsed_sec(core);
         float thresh = ascolto_sensitivity_threshold(core->config.diarization_sensitivity, core->config.custom_threshold);
         snprintf(reply_buf, reply_cap,
-                 "{\"ok\":true,\"state\":\"%s\",\"elapsed_sec\":%llu,"
+                 "{\"ok\":true,\"state\":\"%s\",\"session_id\":%llu,\"elapsed_sec\":%llu,"
                  "\"auto_mic_trigger\":%s,\"external_mic_active\":%s,\"active_mic_app\":\"%s\","
                  "\"language\":\"%s\",\"mic_device\":\"%s\",\"sys_device\":\"%s\","
                  "\"sensitivity\":\"%s\",\"threshold\":%.3f,\"keywords\":\"%s\","
                  "\"whistle_loaded\":%s,\"speaker_count\":%d,\"total_segments\":%llu,"
-                 "\"current_md_path\":\"%s\",\"current_jsonl_path\":\"%s\"}\n",
+                 "\"output_dir\":\"%s\",\"current_md_path\":\"%s\",\"current_jsonl_path\":\"%s\"}\n",
                  ascolto_state_to_string(core->state),
+                 (unsigned long long)core->session_id,
                  (unsigned long long)elapsed,
                  core->config.auto_mic_trigger ? "true" : "false",
                  core->external_mic_active ? "true" : "false",
@@ -117,6 +120,7 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
                  core->whistle.model_loaded ? "true" : "false",
                  core->diarizer.speaker_count,
                  (unsigned long long)core->total_segments,
+                 outdir_esc,
                  md_esc,
                  jl_esc);
         pthread_mutex_unlock(&core->mutex);
@@ -125,15 +129,30 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
 
     if (strcasecmp(buf, "START") == 0) {
         int rc = ascolto_core_start_manual(core);
-        snprintf(reply_buf, reply_cap, "{\"ok\":%s,\"state\":\"%s\"}\n",
-                 rc == 0 ? "true" : "false", ascolto_state_to_string(core->state));
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s,\"state\":\"%s\",\"session_id\":%llu}\n",
+                 rc == 0 ? "true" : "false", ascolto_state_to_string(core->state),
+                 (unsigned long long)core->session_id);
         return 0;
     }
 
     if (strcasecmp(buf, "STOP") == 0) {
         int rc = ascolto_core_stop(core);
-        snprintf(reply_buf, reply_cap, "{\"ok\":%s,\"state\":\"%s\"}\n",
-                 rc == 0 ? "true" : "false", ascolto_state_to_string(core->state));
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s,\"state\":\"%s\",\"session_id\":%llu}\n",
+                 rc == 0 ? "true" : "false", ascolto_state_to_string(core->state),
+                 (unsigned long long)core->session_id);
+        return 0;
+    }
+
+    if (strcasecmp(buf, "TOGGLE") == 0) {
+        int rc = 0;
+        if (core->state == ASCOLTO_STATE_IDLE) {
+            rc = ascolto_core_start_manual(core);
+        } else {
+            rc = ascolto_core_stop(core);
+        }
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s,\"state\":\"%s\",\"session_id\":%llu}\n",
+                 rc == 0 ? "true" : "false", ascolto_state_to_string(core->state),
+                 (unsigned long long)core->session_id);
         return 0;
     }
 
@@ -373,6 +392,14 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
         return 0;
     }
 
+    if (strcasecmp(buf, "OPEN_FOLDER") == 0) {
+        ascolto_tray_open_transcripts_folder(&core->tray);
+        char dir_e[512];
+        json_escape(core->config.output_dir, dir_e, sizeof(dir_e));
+        snprintf(reply_buf, reply_cap, "{\"ok\":true,\"opened\":\"%s\"}\n", dir_e);
+        return 0;
+    }
+
     snprintf(reply_buf, reply_cap, "{\"ok\":false,\"error\":\"unknown command\"}\n");
     return 0;
 }
@@ -384,26 +411,37 @@ static void *obs_server_loop(void *arg) {
     if (!reply) return NULL;
 
     while (obs->running) {
+        struct pollfd pfd;
+        pfd.fd = obs->listen_fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int prc = poll(&pfd, 1, 30);
+        if (prc <= 0) continue;
+
         int cfd = accept(obs->listen_fd, NULL, NULL);
         if (cfd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                struct timespec ts = {0, 25 * 1000 * 1000};
-                nanosleep(&ts, NULL);
-                continue;
-            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
             break;
         }
-        ssize_t n = read(cfd, cmd, sizeof(cmd) - 1);
-        if (n > 0) {
-            cmd[n] = '\0';
-            reply[0] = '\0';
-            ascolto_obs_handle_command(obs, cmd, reply, 65536);
-            size_t rlen = strlen(reply);
-            size_t sent = 0;
-            while (sent < rlen) {
-                ssize_t w = write(cfd, reply + sent, rlen - sent);
-                if (w <= 0) break;
-                sent += (size_t)w;
+        fcntl(cfd, F_SETFD, FD_CLOEXEC);
+
+        struct pollfd cpfd;
+        cpfd.fd = cfd;
+        cpfd.events = POLLIN;
+        cpfd.revents = 0;
+        if (poll(&cpfd, 1, 1000) > 0) {
+            ssize_t n = read(cfd, cmd, sizeof(cmd) - 1);
+            if (n > 0) {
+                cmd[n] = '\0';
+                reply[0] = '\0';
+                ascolto_obs_handle_command(obs, cmd, reply, 65536);
+                size_t rlen = strlen(reply);
+                size_t sent = 0;
+                while (sent < rlen) {
+                    ssize_t w = write(cfd, reply + sent, rlen - sent);
+                    if (w <= 0) break;
+                    sent += (size_t)w;
+                }
             }
         }
         close(cfd);
@@ -423,20 +461,24 @@ int ascolto_obs_init(ascolto_obs_t *obs, ascolto_core_t *core, const char *socke
     if (log_path && *log_path) {
         snprintf(obs->log_path, sizeof(obs->log_path), "%s", log_path);
         obs->log_fp = fopen(log_path, "a");
+        if (obs->log_fp) {
+            fcntl(fileno(obs->log_fp), F_SETFD, FD_CLOEXEC);
+        }
     }
 
     if (socket_path && *socket_path) {
         snprintf(obs->socket_path, sizeof(obs->socket_path), "%s", socket_path);
         unlink(obs->socket_path);
-        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd >= 0) {
             int flags = fcntl(fd, F_GETFL, 0);
             fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
             struct sockaddr_un addr;
             memset(&addr, 0, sizeof(addr));
             addr.sun_family = AF_UNIX;
             snprintf(addr.sun_path, sizeof(addr.sun_path), "%.107s", obs->socket_path);
-            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 && listen(fd, 16) == 0) {
+            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 && listen(fd, 32) == 0) {
                 obs->listen_fd = fd;
                 obs->running = true;
                 pthread_create(&obs->server_thread, NULL, obs_server_loop, obs);
