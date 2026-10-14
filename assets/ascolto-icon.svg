@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)" stroke="#334155" stroke-width="3"/>
+  <!-- Soundwave bars -->
+  <rect x="24" y="52" width="6" height="24" rx="3" fill="#38bdf8" opacity="0.75"/>
+  <rect x="34" y="42" width="6" height="44" rx="3" fill="#38bdf8" opacity="0.9"/>
+  <rect x="88" y="42" width="6" height="44" rx="3" fill="#38bdf8" opacity="0.9"/>
+  <rect x="98" y="52" width="6" height="24" rx="3" fill="#38bdf8" opacity="0.75"/>
+  <!-- Microphone capsule -->
+  <rect x="50" y="26" width="28" height="46" rx="14" fill="url(#accent)"/>
+  <path d="M42 58 a22 22 0 0 0 44 0" fill="none" stroke="#e2e8f0" stroke-width="6" stroke-linecap="round"/>
+  <line x1="64" y1="80" x2="64" y2="98" stroke="#e2e8f0" stroke-width="6" stroke-linecap="round"/>
+  <line x1="48" y1="98" x2="80" y2="98" stroke="#e2e8f0" stroke-width="6" stroke-linecap="round"/>
+  <!-- Active rec dot -->
+  <circle cx="96" cy="32" r="10" fill="#ef4444" stroke="#0f172a" stroke-width="3"/>
+</svg>

@@ -16,7 +16,7 @@ CORE_SRCS := \
 
 CORE_OBJS := $(patsubst src/%.c,build/%.o,$(CORE_SRCS))
 
-.PHONY: all deps test clean
+.PHONY: all deps test install-desktop clean
 
 all: deps bin/ascolto bin/ascoltoctl bin/test_harness
 
@@ -41,6 +41,18 @@ bin/test_harness: $(CORE_OBJS) tests/test_harness.c
 
 test: all
 	./bin/test_harness
+
+install-desktop: all
+	chmod +x scripts/launch_ascolto.sh
+	mkdir -p $(HOME)/Desktop $(HOME)/.local/share/applications
+	cp assets/ascolto.desktop $(HOME)/Desktop/ascolto.desktop
+	cp assets/ascolto-daemon.desktop $(HOME)/Desktop/ascolto-daemon.desktop
+	cp assets/ascolto.desktop $(HOME)/.local/share/applications/ascolto.desktop
+	cp assets/ascolto-daemon.desktop $(HOME)/.local/share/applications/ascolto-daemon.desktop
+	chmod +x $(HOME)/Desktop/ascolto.desktop $(HOME)/Desktop/ascolto-daemon.desktop
+	chmod +x $(HOME)/.local/share/applications/ascolto.desktop $(HOME)/.local/share/applications/ascolto-daemon.desktop
+	gio set $(HOME)/Desktop/ascolto.desktop metadata::trusted true 2>/dev/null || true
+	gio set $(HOME)/Desktop/ascolto-daemon.desktop metadata::trusted true 2>/dev/null || true
 
 clean:
 	rm -rf build bin

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -91,6 +92,25 @@ int ascolto_whistle_init(ascolto_whistle_engine_t *eng, const char *weights_path
     snprintf(eng->weights_path, sizeof(eng->weights_path), "%s", weights_path);
 
     FILE *fp = fopen(weights_path, "rb");
+    if (!fp && weights_path[0] != '/') {
+        char exe_path[512];
+        ssize_t elen = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (elen > 0) {
+            exe_path[elen] = '\0';
+            char *slash = strrchr(exe_path, '/');
+            if (slash) {
+                *slash = '\0';
+                char *slash2 = strrchr(exe_path, '/');
+                if (slash2) *slash2 = '\0';
+                char alt_path[512];
+                snprintf(alt_path, sizeof(alt_path), "%.240s/%.240s", exe_path, weights_path);
+                fp = fopen(alt_path, "rb");
+                if (fp) {
+                    snprintf(eng->weights_path, sizeof(eng->weights_path), "%s", alt_path);
+                }
+            }
+        }
+    }
     if (!fp) {
         return -1;
     }

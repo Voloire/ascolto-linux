@@ -1,0 +1,24 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Ascolto Daemon
+Comment=Avvia il demone Ascolto in background nella barra GNOME (attivazione automatica col microfono)
+Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh daemon
+Path=/home/voloirex/ascolto-linux
+Icon=/home/voloirex/ascolto-linux/assets/ascolto-daemon-icon.svg
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=false
+Actions=OpenTranscripts;StopNow;QuitDaemon;
+
+[Desktop Action OpenTranscripts]
+Name=Apri Cartella Trascrizioni
+Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh open-folder
+
+[Desktop Action StopNow]
+Name=Ferma Sessione Corrente
+Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh stop
+
+[Desktop Action QuitDaemon]
+Name=Termina Demone Ascolto
+Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh quit
