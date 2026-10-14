@@ -76,7 +76,12 @@ void ascolto_config_init_defaults(ascolto_config_t *cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->auto_mic_trigger = true;
+    cfg->save_audio = false;
+    cfg->cloud_recap = false;
+    cfg->recap_tts = false;
     snprintf(cfg->language, sizeof(cfg->language), "auto");
+    snprintf(cfg->recap_lang, sizeof(cfg->recap_lang), "it");
+    snprintf(cfg->tts_lang, sizeof(cfg->tts_lang), "it");
     snprintf(cfg->mic_device, sizeof(cfg->mic_device), "default");
     snprintf(cfg->sys_device, sizeof(cfg->sys_device), "default");
     cfg->diarization_sensitivity = ASCOLTO_SENSITIVITY_MEDIUM;
@@ -132,6 +137,16 @@ int ascolto_config_load(ascolto_config_t *cfg, const char *path) {
 
         if (strcmp(key, "auto_mic_trigger") == 0) {
             cfg->auto_mic_trigger = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        } else if (strcmp(key, "save_audio") == 0) {
+            cfg->save_audio = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        } else if (strcmp(key, "cloud_recap") == 0) {
+            cfg->cloud_recap = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        } else if (strcmp(key, "recap_tts") == 0) {
+            cfg->recap_tts = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        } else if (strcmp(key, "recap_lang") == 0) {
+            snprintf(cfg->recap_lang, sizeof(cfg->recap_lang), "%s", val);
+        } else if (strcmp(key, "tts_lang") == 0) {
+            snprintf(cfg->tts_lang, sizeof(cfg->tts_lang), "%s", val);
         } else if (strcmp(key, "language") == 0) {
             snprintf(cfg->language, sizeof(cfg->language), "%s", val);
         } else if (strcmp(key, "mic_device") == 0) {
@@ -172,6 +187,11 @@ int ascolto_config_save(const ascolto_config_t *cfg, const char *path) {
     if (!fp) return -1;
     fprintf(fp, "# ascolto configuration\n");
     fprintf(fp, "auto_mic_trigger=%s\n", cfg->auto_mic_trigger ? "true" : "false");
+    fprintf(fp, "save_audio=%s\n", cfg->save_audio ? "true" : "false");
+    fprintf(fp, "cloud_recap=%s\n", cfg->cloud_recap ? "true" : "false");
+    fprintf(fp, "recap_tts=%s\n", cfg->recap_tts ? "true" : "false");
+    fprintf(fp, "recap_lang=%s\n", cfg->recap_lang);
+    fprintf(fp, "tts_lang=%s\n", cfg->tts_lang);
     fprintf(fp, "language=%s\n", cfg->language);
     fprintf(fp, "mic_device=%s\n", cfg->mic_device);
     fprintf(fp, "sys_device=%s\n", cfg->sys_device);

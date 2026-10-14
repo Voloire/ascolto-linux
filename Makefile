@@ -2,8 +2,10 @@ CC       := gcc
 PKG_CFG  := pkg-config
 GLIB_FLAGS := $(shell $(PKG_CFG) --cflags json-glib-1.0 gio-2.0 gobject-2.0 glib-2.0)
 GLIB_LIBS  := $(shell $(PKG_CFG) --libs json-glib-1.0 gio-2.0 gobject-2.0 glib-2.0)
-CFLAGS   := -std=c11 -Wall -Wextra -O2 -g -Iinclude -Ithird_party/whistle $(GLIB_FLAGS)
-LDFLAGS  := third_party/whistle/libneedle.so -Wl,-rpath,'$$ORIGIN/../third_party/whistle' $(GLIB_LIBS) -ldl -lpthread -lm
+AV_FLAGS   := $(shell $(PKG_CFG) --cflags libavformat libavcodec libavutil)
+AV_LIBS    := $(shell $(PKG_CFG) --libs libavformat libavcodec libavutil)
+CFLAGS   := -std=c11 -Wall -Wextra -O2 -g -Iinclude -Ithird_party/whistle $(GLIB_FLAGS) $(AV_FLAGS)
+LDFLAGS  := third_party/whistle/libneedle.so -Wl,-rpath,'$$ORIGIN/../third_party/whistle' $(GLIB_LIBS) $(AV_LIBS) -ldl -lpthread -lm
 
 CORE_SRCS := \
 	src/types_config.c \
@@ -11,14 +13,15 @@ CORE_SRCS := \
 	src/whistle_engine.c \
 	src/diarizer.c \
 	src/audio_backend.c \
+	src/audio_recorder.c \
 	src/tray_ui.c \
 	src/core.c
 
 CORE_OBJS := $(patsubst src/%.c,build/%.o,$(CORE_SRCS))
 
-.PHONY: all deps test install-desktop clean
+.PHONY: all deps test install-desktop install-autostart clean
 
-all: deps bin/ascolto bin/ascoltoctl bin/test_harness
+all: deps bin/ascolto bin/ascoltoctl bin/flac2wav bin/test_harness
 
 deps:
 	@./scripts/fetch_whistle.sh
@@ -34,6 +37,10 @@ bin/ascolto: $(CORE_OBJS) src/main.c
 bin/ascoltoctl: tools/ascoltoctl.c
 	@mkdir -p bin
 	$(CC) -std=c11 -Wall -Wextra -O2 -g tools/ascoltoctl.c -o $@
+
+bin/flac2wav: tools/flac2wav.c
+	@mkdir -p bin
+	$(CC) -std=c11 -Wall -Wextra -O2 -g $(AV_FLAGS) tools/flac2wav.c -o $@ $(AV_LIBS)
 
 bin/test_harness: $(CORE_OBJS) tests/test_harness.c
 	@mkdir -p bin
@@ -53,6 +60,12 @@ install-desktop: all
 	chmod +x $(HOME)/.local/share/applications/ascolto.desktop $(HOME)/.local/share/applications/ascolto-daemon.desktop
 	gio set $(HOME)/Desktop/ascolto.desktop metadata::trusted true 2>/dev/null || true
 	gio set $(HOME)/Desktop/ascolto-daemon.desktop metadata::trusted true 2>/dev/null || true
+
+install-autostart: all
+	chmod +x scripts/launch_ascolto.sh
+	mkdir -p $(HOME)/.config/autostart
+	sed -e 's|^Actions=.*||' -e '/^\[Desktop Action/,$$d' assets/ascolto-daemon.desktop > $(HOME)/.config/autostart/ascolto-daemon.desktop
+	printf 'X-GNOME-Autostart-enabled=true\nX-GNOME-Autostart-Delay=5\n' >> $(HOME)/.config/autostart/ascolto-daemon.desktop
 
 clean:
 	rm -rf build bin

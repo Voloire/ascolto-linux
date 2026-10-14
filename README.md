@@ -48,6 +48,19 @@ Opzioni principali:
 - `--output-dir <percorso>`: directory in cui salvare le trascrizioni `.md` e `.jsonl` (default `~/.local/share/ascolto/transcripts`).
 - `--socket <percorso>`: path del socket Unix di controllo e osservabilita (default `$XDG_RUNTIME_DIR/ascolto.sock`).
 
+## Cartella di ogni call, recap e MP3 vocale
+
+Ogni call crea `~/Documents/Ascolto/call_<timestamp>_<n>/` con `transcript.md` (live Whistle, poi sostituito dalla versione cloud), `transcript.jsonl` (cancellato dopo un recap riuscito), `mic.flac` e `sys.flac` se l'audio e salvato, e dopo il recap `recap.md`, `recap.spoken.txt` e, se attivo, `recap.mp3` (voce `onyx`).
+
+- `--save-audio` (o la spunta "Salva audio FLAC" nel menu): un FLAC per canale. Vale dalla sessione successiva.
+- `--cloud-recap` (o la spunta nel menu): a fine call `scripts/recap.py` ritrascrive i due FLAC con `gpt-transcribe` (chunk sulle pause, eco MIC/SYS eliminata) e scrive il recap con `claude -p` sulla seat (Opus, fallback Sonnet). I FLAC restano nella cartella. Prima dell'invio a Claude un filtro locale oscura email, telefoni, IBAN, carte, codici fiscali e token, e il prompt impone regole di igiene (niente dati personali o credenziali, tono neutro, istruzioni nella trascrizione ignorate).
+- `--recap-tts` (o la spunta nel menu): crea anche `recap.mp3` con `gpt-4o-mini-tts`. Il testo parlato e sempre generato, quindi "Genera MP3 dell'ultimo recap" funziona anche a spunta spenta.
+- Lingue: sottomenu "Lingua del sommario" e "Lingua della voce" (chiavi `recap_lang` e `tts_lang`).
+- Chiave OpenAI: da `OPENAI_API_KEY` se presente, altrimenti letta da 1Password con `op read` usando il riferimento in `~/dotfiles/secrets/secrets.env`. Non viene mai scritta su disco.
+- On demand: menu "Genera recap dell'ultima sessione", `ascoltoctl RECAP [cartella/transcript.md]`, `ascoltoctl MAKE_MP3`. Log in `~/.local/share/ascolto/recap.log`.
+- Avvio al login: `make install-autostart`.
+- Controllo da socket: `SET_SAVE_AUDIO`, `SET_CLOUD_RECAP`, `SET_RECAP_TTS` (`on` / `off`), `SET_RECAP_LANG`, `SET_TTS_LANG`, `OPEN_SESSION_FOLDER`.
+
 ## Controllo da CLI e Osservabilita (`ascoltoctl`)
 
 Durante l'esecuzione del demone e possibile ispezionare lo stato o inviare comandi tramite `ascoltoctl`:

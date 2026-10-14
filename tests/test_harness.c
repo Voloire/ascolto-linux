@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ascolto/core.h"
+#include <libavformat/avformat.h>
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -471,6 +472,43 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
     return 0;
 }
 
+static int test_flac_recorder_roundtrip(void) {
+    printf("[TEST 8] FLAC recorder round-trip (write, close, reopen, count samples)...\n");
+    const char *path = "/tmp/opencode/ascolto_test_rec.flac";
+    unlink(path);
+    ascolto_audio_recorder_t *rec = ascolto_audio_recorder_open(path);
+    ASSERT_TRUE(rec != NULL, "recorder open failed");
+
+    const size_t total = 16000 * 3 + 777; /* deliberately not a multiple of the FLAC frame size */
+    float chunk[1600];
+    size_t written = 0;
+    while (written < total) {
+        size_t n = (total - written) < 1600 ? (total - written) : 1600;
+        for (size_t i = 0; i < n; i++) {
+            chunk[i] = 0.5f * sinf(2.0f * 3.14159265f * 440.0f * (float)(written + i) / 16000.0f);
+        }
+        ASSERT_TRUE(ascolto_audio_recorder_write(rec, chunk, n) == 0, "recorder write failed");
+        written += n;
+    }
+    ascolto_audio_recorder_close(rec);
+
+    struct stat st;
+    ASSERT_TRUE(stat(path, &st) == 0 && st.st_size > 1000, "flac file missing or too small");
+    ASSERT_TRUE((st.st_mode & 0777) == 0600, "flac file must be mode 0600");
+
+    AVFormatContext *fmt = NULL;
+    ASSERT_TRUE(avformat_open_input(&fmt, path, NULL, NULL) == 0, "reopen flac failed");
+    ASSERT_TRUE(avformat_find_stream_info(fmt, NULL) >= 0, "stream info failed");
+    AVCodecParameters *par = fmt->streams[0]->codecpar;
+    ASSERT_TRUE(par->codec_id == AV_CODEC_ID_FLAC && par->sample_rate == 16000 &&
+                par->ch_layout.nb_channels == 1, "unexpected flac parameters");
+    int64_t dur = fmt->streams[0]->duration;
+    avformat_close_input(&fmt);
+    ASSERT_TRUE(dur == (int64_t)total, "decoded sample count differs from written count");
+    printf("  -> PASS (%zu samples, %lld bytes)\n", total, (long long)st.st_size);
+    return 0;
+}
+
 int main(void) {
     mkdir("/tmp/opencode", 0755);
     printf("=== ascolto Test Harness & Observability Suite ===\n\n");
@@ -482,7 +520,8 @@ int main(void) {
         test_e2e_multispeaker_call_and_ipc_observability,
         test_live_pipewire_integration,
         test_daemon_binary_and_cli_tool,
-        test_live_daemon_repeated_start_stop_and_gui_dbusmenu
+        test_live_daemon_repeated_start_stop_and_gui_dbusmenu,
+        test_flac_recorder_roundtrip
     };
 
     size_t num_tests = sizeof(tests) / sizeof(tests[0]);

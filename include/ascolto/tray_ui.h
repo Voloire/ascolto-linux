@@ -19,7 +19,12 @@ typedef struct {
     bool menu_recording_enabled;
     bool menu_paused;
     bool menu_auto_mic_checked;
+    bool menu_save_audio_checked;
+    bool menu_cloud_recap_checked;
+    bool menu_recap_tts_checked;
     char selected_language[16];
+    char selected_recap_lang[8];
+    char selected_tts_lang[8];
     char selected_mic[128];
     char selected_sys[128];
     ascolto_sensitivity_t selected_sensitivity;
@@ -43,6 +48,7 @@ void ascolto_tray_update(ascolto_tray_ui_t *ui);
 void ascolto_tray_get_snapshot(ascolto_tray_ui_t *ui, ascolto_tray_snapshot_t *out_snap);
 void ascolto_tray_step_iteration(ascolto_tray_ui_t *ui);
 void ascolto_tray_open_transcripts_folder(ascolto_tray_ui_t *ui);
+void ascolto_tray_open_session_folder(ascolto_tray_ui_t *ui);
 void ascolto_tray_destroy(ascolto_tray_ui_t *ui);
 
 #ifdef __cplusplus

@@ -25,6 +25,9 @@ static void print_usage(const char *prog) {
            "  --lang <code>            Language (auto, it, en, es, fr, de, nl, pl)\n"
            "  --keywords <list>        Comma-separated custom keywords\n"
            "  --sensitivity <level>    Speaker diarization sensitivity (low, medium, high)\n"
+           "  --save-audio             Save one FLAC file per channel (MIC, SYS) next to the transcript\n"
+           "  --cloud-recap            After each call: cloud transcription + Claude recap (needs OPENAI_API_KEY)\n"
+           "  --recap-tts              Also render the recap to MP3 (OpenAI TTS)\n"
            "  --no-auto-mic            Disable automatic microphone trigger on startup\n"
            "  --headless               Run without GTK/AppIndicator GUI\n"
            "  --mock-audio             Use deterministic mock audio backend (test harness)\n"
@@ -65,6 +68,12 @@ int main(int argc, char **argv) {
             snprintf(cfg.keywords, sizeof(cfg.keywords), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--sensitivity") == 0 && i + 1 < argc) {
             cfg.diarization_sensitivity = ascolto_sensitivity_from_string(argv[++i]);
+        } else if (strcmp(argv[i], "--save-audio") == 0) {
+            cfg.save_audio = true;
+        } else if (strcmp(argv[i], "--cloud-recap") == 0) {
+            cfg.cloud_recap = true;
+        } else if (strcmp(argv[i], "--recap-tts") == 0) {
+            cfg.recap_tts = true;
         } else if (strcmp(argv[i], "--no-auto-mic") == 0) {
             cfg.auto_mic_trigger = false;
         } else if (strcmp(argv[i], "--headless") == 0) {

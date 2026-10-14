@@ -178,6 +178,62 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
         return 0;
     }
 
+    if (strncasecmp(buf, "SET_SAVE_AUDIO ", 15) == 0) {
+        const char *arg = buf + 15;
+        bool en = (strcmp(arg, "1") == 0 || strcasecmp(arg, "true") == 0 || strcasecmp(arg, "on") == 0);
+        ascolto_core_set_save_audio(core, en);
+        snprintf(reply_buf, reply_cap, "{\"ok\":true,\"save_audio\":%s}\n", en ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "SET_CLOUD_RECAP ", 16) == 0) {
+        const char *arg = buf + 16;
+        bool en = (strcmp(arg, "1") == 0 || strcasecmp(arg, "true") == 0 || strcasecmp(arg, "on") == 0);
+        ascolto_core_set_cloud_recap(core, en);
+        snprintf(reply_buf, reply_cap, "{\"ok\":true,\"cloud_recap\":%s}\n", en ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "SET_RECAP_TTS ", 14) == 0) {
+        const char *arg = buf + 14;
+        bool en = (strcmp(arg, "1") == 0 || strcasecmp(arg, "true") == 0 || strcasecmp(arg, "on") == 0);
+        ascolto_core_set_recap_tts(core, en);
+        snprintf(reply_buf, reply_cap, "{\"ok\":true,\"recap_tts\":%s}\n", en ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "RECAP", 5) == 0 && (buf[5] == '\0' || buf[5] == ' ')) {
+        int rc = ascolto_core_run_recap(core, buf[5] == ' ' ? buf + 6 : NULL);
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s}\n", rc == 0 ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "SET_RECAP_LANG ", 15) == 0) {
+        int rc = ascolto_core_set_recap_lang(core, buf + 15);
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s}\n", rc == 0 ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "SET_TTS_LANG ", 13) == 0) {
+        int rc = ascolto_core_set_tts_lang(core, buf + 13);
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s}\n", rc == 0 ? "true" : "false");
+        return 0;
+    }
+
+    if (strncasecmp(buf, "MAKE_MP3", 8) == 0 && (buf[8] == '\0' || buf[8] == ' ')) {
+        int rc = ascolto_core_make_mp3(core, buf[8] == ' ' ? buf + 9 : NULL);
+        snprintf(reply_buf, reply_cap, "{\"ok\":%s}\n", rc == 0 ? "true" : "false");
+        return 0;
+    }
+
+    if (strcasecmp(buf, "OPEN_SESSION_FOLDER") == 0) {
+        ascolto_tray_open_session_folder(&core->tray);
+        char dir_e[512];
+        json_escape(core->current_session_dir[0] ? core->current_session_dir : core->config.output_dir, dir_e, sizeof(dir_e));
+        snprintf(reply_buf, reply_cap, "{\"ok\":true,\"opened\":\"%s\"}\n", dir_e);
+        return 0;
+    }
+
     if (strncasecmp(buf, "SET_LANG ", 9) == 0) {
         ascolto_core_set_language(core, buf + 9);
         snprintf(reply_buf, reply_cap, "{\"ok\":true,\"language\":\"%s\"}\n", core->config.language);
@@ -354,7 +410,7 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
         snprintf(reply_buf, reply_cap,
                  "{\"ok\":true,\"active\":%s,\"gui_indicator\":%s,\"icon\":\"%s\","
                  "\"label\":\"%s\",\"status_text\":\"%s\",\"recording\":%s,\"paused\":%s,"
-                 "\"auto_mic_checked\":%s,\"language\":\"%s\",\"mic\":\"%s\",\"sys\":\"%s\","
+                 "\"auto_mic_checked\":%s,\"save_audio_checked\":%s,\"cloud_recap_checked\":%s,\"recap_tts_checked\":%s,\"language\":\"%s\",\"mic\":\"%s\",\"sys\":\"%s\","
                  "\"sensitivity\":\"%s\",\"keywords_summary\":\"%s\",\"recent_files_count\":%zu}\n",
                  snap.active ? "true" : "false",
                  snap.using_gui_indicator ? "true" : "false",
@@ -364,6 +420,9 @@ int ascolto_obs_handle_command(ascolto_obs_t *obs, const char *cmd_line, char *r
                  snap.menu_recording_enabled ? "true" : "false",
                  snap.menu_paused ? "true" : "false",
                  snap.menu_auto_mic_checked ? "true" : "false",
+                 snap.menu_save_audio_checked ? "true" : "false",
+                 snap.menu_cloud_recap_checked ? "true" : "false",
+                 snap.menu_recap_tts_checked ? "true" : "false",
                  snap.selected_language,
                  snap.selected_mic,
                  snap.selected_sys,

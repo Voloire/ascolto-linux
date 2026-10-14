@@ -5,6 +5,7 @@
 #include "ascolto/diarizer.h"
 #include "ascolto/whistle_engine.h"
 #include "ascolto/audio_backend.h"
+#include "ascolto/audio_recorder.h"
 #include "ascolto/tray_ui.h"
 #include "ascolto/observability.h"
 #include <pthread.h>
@@ -39,8 +40,11 @@ struct ascolto_core {
     uint64_t pause_start_ms;
     double session_audio_sec[2];
 
+    char current_session_dir[512];
     char current_md_path[512];
     char current_jsonl_path[512];
+    char current_audio_path[2][512];
+    ascolto_audio_recorder_t *recorder[2];
     FILE *md_fp;
     FILE *jsonl_fp;
 
@@ -73,6 +77,15 @@ int ascolto_core_resume(ascolto_core_t *core);
 
 /* Configuration mutations at runtime (from tray menu or control socket) */
 int ascolto_core_set_auto_mic(ascolto_core_t *core, bool enabled);
+int ascolto_core_set_save_audio(ascolto_core_t *core, bool enabled);
+int ascolto_core_set_cloud_recap(ascolto_core_t *core, bool enabled);
+int ascolto_core_set_recap_tts(ascolto_core_t *core, bool enabled);
+/* Spawns scripts/recap.py detached for a session; md_path may be NULL for the last session. */
+int ascolto_core_run_recap(ascolto_core_t *core, const char *md_path);
+/* Renders recap.spoken.txt of a session to recap.mp3 (no STT, no Claude call). */
+int ascolto_core_make_mp3(ascolto_core_t *core, const char *md_path);
+int ascolto_core_set_recap_lang(ascolto_core_t *core, const char *lang);
+int ascolto_core_set_tts_lang(ascolto_core_t *core, const char *lang);
 int ascolto_core_set_language(ascolto_core_t *core, const char *lang);
 int ascolto_core_set_mic_device(ascolto_core_t *core, const char *dev);
 int ascolto_core_set_sys_device(ascolto_core_t *core, const char *dev);

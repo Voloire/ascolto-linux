@@ -66,12 +66,19 @@ typedef struct {
     void *item_start_stop;
     void *item_pause_resume;
     void *item_auto_mic;
+    void *item_save_audio;
+    void *item_cloud_recap;
+    void *item_recap_tts;
+    void *item_recap_now;
     void *item_keywords;
     void *item_recent;
     void *recent_items[5];
     char recent_paths[5][512];
 
     void *lang_items[8];
+    void *recap_lang_items[7];
+    void *tts_lang_items[7];
+    void *item_make_mp3;
     const char *lang_codes[8];
 
     void *sens_items[3];
@@ -153,6 +160,12 @@ void ascolto_tray_open_transcripts_folder(ascolto_tray_ui_t *ui) {
     launch_path_nonblocking(ui->core->config.output_dir, true);
 }
 
+void ascolto_tray_open_session_folder(ascolto_tray_ui_t *ui) {
+    if (!ui || !ui->core) return;
+    const char *dir = ui->core->current_session_dir[0] ? ui->core->current_session_dir : ui->core->config.output_dir;
+    launch_path_nonblocking(dir, true);
+}
+
 static void apply_snapshot_to_gtk_main_thread(ascolto_tray_ui_t *ui);
 
 static void on_menu_start_stop(void *widget, gpointer user_data) {
@@ -188,6 +201,78 @@ static void on_menu_auto_mic_toggled(void *widget, gpointer user_data) {
     gboolean active = p->gtk_check_menu_item_get_active(widget);
     ascolto_core_set_auto_mic(ui->core, active ? true : false);
     apply_snapshot_to_gtk_main_thread(ui);
+}
+
+static void on_menu_save_audio_toggled(void *widget, gpointer user_data) {
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core || !ui->gtk_impl) return;
+    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
+    if (p->updating_widgets) return;
+    gboolean active = p->gtk_check_menu_item_get_active(widget);
+    ascolto_core_set_save_audio(ui->core, active ? true : false);
+    apply_snapshot_to_gtk_main_thread(ui);
+}
+
+static void on_menu_cloud_recap_toggled(void *widget, gpointer user_data) {
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core || !ui->gtk_impl) return;
+    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
+    if (p->updating_widgets) return;
+    ascolto_core_set_cloud_recap(ui->core, p->gtk_check_menu_item_get_active(widget) ? true : false);
+    apply_snapshot_to_gtk_main_thread(ui);
+}
+
+static void on_menu_recap_tts_toggled(void *widget, gpointer user_data) {
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core || !ui->gtk_impl) return;
+    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
+    if (p->updating_widgets) return;
+    ascolto_core_set_recap_tts(ui->core, p->gtk_check_menu_item_get_active(widget) ? true : false);
+    apply_snapshot_to_gtk_main_thread(ui);
+}
+
+static void on_menu_recap_now(void *widget, gpointer user_data) {
+    (void)widget;
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core) return;
+    ascolto_core_run_recap(ui->core, NULL);
+}
+
+static void on_menu_set_recap_lang(void *widget, gpointer user_data) {
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core || !ui->gtk_impl) return;
+    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
+    if (p->updating_widgets) return;
+    const char *lang = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-lang");
+    if (lang) {
+        ascolto_core_set_recap_lang(ui->core, lang);
+        apply_snapshot_to_gtk_main_thread(ui);
+    }
+}
+
+static void on_menu_set_tts_lang(void *widget, gpointer user_data) {
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core || !ui->gtk_impl) return;
+    gtk_tray_priv_t *p = (gtk_tray_priv_t *)ui->gtk_impl;
+    if (p->updating_widgets) return;
+    const char *lang = (const char *)g_object_get_data(G_OBJECT(widget), "ascolto-lang");
+    if (lang) {
+        ascolto_core_set_tts_lang(ui->core, lang);
+        apply_snapshot_to_gtk_main_thread(ui);
+    }
+}
+
+static void on_menu_make_mp3(void *widget, gpointer user_data) {
+    (void)widget;
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (!ui || !ui->core) return;
+    ascolto_core_make_mp3(ui->core, NULL);
+}
+
+static void on_menu_open_session_folder(void *widget, gpointer user_data) {
+    (void)widget;
+    ascolto_tray_ui_t *ui = (ascolto_tray_ui_t *)user_data;
+    if (ui) ascolto_tray_open_session_folder(ui);
 }
 
 static void on_menu_set_lang(void *widget, gpointer user_data) {
@@ -415,6 +500,54 @@ static bool init_gtk_indicator(ascolto_tray_ui_t *ui) {
     g_signal_connect_data(p->item_auto_mic, "toggled", G_CALLBACK(on_menu_auto_mic_toggled), ui, NULL, 0);
     p->gtk_menu_shell_append(p->menu, p->item_auto_mic);
 
+    p->item_save_audio = p->gtk_check_menu_item_new_with_label("Salva audio FLAC (dalla prossima sessione)");
+    p->gtk_check_menu_item_set_active(p->item_save_audio, ui->core->config.save_audio ? TRUE : FALSE);
+    g_signal_connect_data(p->item_save_audio, "toggled", G_CALLBACK(on_menu_save_audio_toggled), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, p->item_save_audio);
+
+    p->item_cloud_recap = p->gtk_check_menu_item_new_with_label("Recap a fine call (trascrizione cloud + Claude)");
+    p->gtk_check_menu_item_set_active(p->item_cloud_recap, ui->core->config.cloud_recap ? TRUE : FALSE);
+    g_signal_connect_data(p->item_cloud_recap, "toggled", G_CALLBACK(on_menu_cloud_recap_toggled), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, p->item_cloud_recap);
+
+    p->item_recap_tts = p->gtk_check_menu_item_new_with_label("Aggiungi MP3 vocale del recap (TTS)");
+    p->gtk_check_menu_item_set_active(p->item_recap_tts, ui->core->config.recap_tts ? TRUE : FALSE);
+    g_signal_connect_data(p->item_recap_tts, "toggled", G_CALLBACK(on_menu_recap_tts_toggled), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, p->item_recap_tts);
+
+    p->item_recap_now = p->gtk_menu_item_new_with_label("Genera recap dell'ultima sessione");
+    g_signal_connect_data(p->item_recap_now, "activate", G_CALLBACK(on_menu_recap_now), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, p->item_recap_now);
+
+    p->item_make_mp3 = p->gtk_menu_item_new_with_label("Genera MP3 dell'ultimo recap");
+    g_signal_connect_data(p->item_make_mp3, "activate", G_CALLBACK(on_menu_make_mp3), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, p->item_make_mp3);
+
+    static const char *recap_langs[7][2] = {
+        {"it", "Italiano (it)"}, {"en", "English (en)"}, {"es", "Espanol (es)"}, {"fr", "Francais (fr)"},
+        {"de", "Deutsch (de)"}, {"nl", "Nederlands (nl)"}, {"pl", "Polski (pl)"}
+    };
+    void *item_recap_lang = p->gtk_menu_item_new_with_label("Lingua del sommario (TL;DR)");
+    void *sub_recap_lang = p->gtk_menu_new();
+    void *item_tts_lang = p->gtk_menu_item_new_with_label("Lingua della voce (TTS)");
+    void *sub_tts_lang = p->gtk_menu_new();
+    for (size_t i = 0; i < 7; i++) {
+        void *ri = p->gtk_check_menu_item_new_with_label(recap_langs[i][1]);
+        p->recap_lang_items[i] = ri;
+        g_object_set_data(G_OBJECT(ri), "ascolto-lang", (gpointer)recap_langs[i][0]);
+        g_signal_connect_data(ri, "toggled", G_CALLBACK(on_menu_set_recap_lang), ui, NULL, 0);
+        p->gtk_menu_shell_append(sub_recap_lang, ri);
+        void *ti = p->gtk_check_menu_item_new_with_label(recap_langs[i][1]);
+        p->tts_lang_items[i] = ti;
+        g_object_set_data(G_OBJECT(ti), "ascolto-lang", (gpointer)recap_langs[i][0]);
+        g_signal_connect_data(ti, "toggled", G_CALLBACK(on_menu_set_tts_lang), ui, NULL, 0);
+        p->gtk_menu_shell_append(sub_tts_lang, ti);
+    }
+    p->gtk_menu_item_set_submenu(item_recap_lang, sub_recap_lang);
+    p->gtk_menu_shell_append(p->menu, item_recap_lang);
+    p->gtk_menu_item_set_submenu(item_tts_lang, sub_tts_lang);
+    p->gtk_menu_shell_append(p->menu, item_tts_lang);
+
     p->gtk_menu_shell_append(p->menu, p->gtk_separator_menu_item_new());
 
     /* Language submenu with checkmarks */
@@ -519,6 +652,10 @@ static bool init_gtk_indicator(ascolto_tray_ui_t *ui) {
     g_signal_connect_data(item_open, "activate", G_CALLBACK(on_menu_open_folder), ui, NULL, 0);
     p->gtk_menu_shell_append(p->menu, item_open);
 
+    void *item_open_session = p->gtk_menu_item_new_with_label("Apri cartella dell'ultima sessione");
+    g_signal_connect_data(item_open_session, "activate", G_CALLBACK(on_menu_open_session_folder), ui, NULL, 0);
+    p->gtk_menu_shell_append(p->menu, item_open_session);
+
     p->gtk_menu_shell_append(p->menu, p->gtk_separator_menu_item_new());
 
     void *item_quit = p->gtk_menu_item_new_with_label("Esci");
@@ -574,6 +711,31 @@ static void apply_snapshot_to_gtk_main_thread(ascolto_tray_ui_t *ui) {
     if (first || snap.menu_auto_mic_checked != p->applied.menu_auto_mic_checked) {
         p->gtk_check_menu_item_set_active(p->item_auto_mic,
                                           snap.menu_auto_mic_checked ? TRUE : FALSE);
+    }
+    if (first || snap.menu_save_audio_checked != p->applied.menu_save_audio_checked) {
+        p->gtk_check_menu_item_set_active(p->item_save_audio,
+                                          snap.menu_save_audio_checked ? TRUE : FALSE);
+    }
+    if (first || snap.menu_cloud_recap_checked != p->applied.menu_cloud_recap_checked) {
+        p->gtk_check_menu_item_set_active(p->item_cloud_recap,
+                                          snap.menu_cloud_recap_checked ? TRUE : FALSE);
+    }
+    if (first || snap.menu_recap_tts_checked != p->applied.menu_recap_tts_checked) {
+        p->gtk_check_menu_item_set_active(p->item_recap_tts,
+                                          snap.menu_recap_tts_checked ? TRUE : FALSE);
+    }
+    static const char *const lang_codes7[7] = {"it", "en", "es", "fr", "de", "nl", "pl"};
+    if (first || strcmp(snap.selected_recap_lang, p->applied.selected_recap_lang) != 0) {
+        for (size_t i = 0; i < 7; i++) {
+            p->gtk_check_menu_item_set_active(p->recap_lang_items[i],
+                                              strcmp(snap.selected_recap_lang, lang_codes7[i]) == 0 ? TRUE : FALSE);
+        }
+    }
+    if (first || strcmp(snap.selected_tts_lang, p->applied.selected_tts_lang) != 0) {
+        for (size_t i = 0; i < 7; i++) {
+            p->gtk_check_menu_item_set_active(p->tts_lang_items[i],
+                                              strcmp(snap.selected_tts_lang, lang_codes7[i]) == 0 ? TRUE : FALSE);
+        }
     }
     if (first || strcmp(snap.selected_language, p->applied.selected_language) != 0) {
         for (size_t i = 0; i < 8; i++) {
@@ -654,7 +816,12 @@ void ascolto_tray_update(ascolto_tray_ui_t *ui) {
     ascolto_tray_snapshot_t *s = &ui->snapshot;
     s->active = true;
     s->menu_auto_mic_checked = core->config.auto_mic_trigger;
+    s->menu_save_audio_checked = core->config.save_audio;
+    s->menu_cloud_recap_checked = core->config.cloud_recap;
+    s->menu_recap_tts_checked = core->config.recap_tts;
     snprintf(s->selected_language, sizeof(s->selected_language), "%s", core->config.language);
+    snprintf(s->selected_recap_lang, sizeof(s->selected_recap_lang), "%s", core->config.recap_lang);
+    snprintf(s->selected_tts_lang, sizeof(s->selected_tts_lang), "%s", core->config.tts_lang);
     snprintf(s->selected_mic, sizeof(s->selected_mic), "%s", core->config.mic_device);
     snprintf(s->selected_sys, sizeof(s->selected_sys), "%s", core->config.sys_device);
     s->selected_sensitivity = core->config.diarization_sensitivity;

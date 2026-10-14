@@ -3,11 +3,13 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -66,10 +68,13 @@ static void scan_existing_transcripts(ascolto_core_t *core) {
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
         size_t len = strlen(ent->d_name);
+        char full[512];
         if (len > 3 && strcmp(ent->d_name + len - 3, ".md") == 0) {
-            char full[512];
             snprintf(full, sizeof(full), "%.240s/%.240s", core->config.output_dir, ent->d_name);
             add_recent_file(core, full);
+        } else if (strncmp(ent->d_name, "call_", 5) == 0) {
+            snprintf(full, sizeof(full), "%.240s/%.240s/transcript.md", core->config.output_dir, ent->d_name);
+            if (access(full, R_OK) == 0) add_recent_file(core, full);
         }
     }
     closedir(dir);
@@ -238,6 +243,104 @@ void ascolto_core_flush_channel(ascolto_core_t *core, ascolto_channel_t channel)
     }
 }
 
+static const char *recap_language_name(const char *code) {
+    static const struct { const char *code; const char *name; } map[] = {
+        {"en", "English"}, {"es", "Spanish"}, {"fr", "French"}, {"de", "German"},
+        {"nl", "Dutch"}, {"pl", "Polish"}
+    };
+    for (size_t i = 0; code && i < sizeof(map) / sizeof(map[0]); i++) {
+        if (strcmp(code, map[i].code) == 0) return map[i].name;
+    }
+    return "Italian";
+}
+
+static int spawn_recap(ascolto_core_t *core, const char *md_path, bool mp3_only) {
+    if (!core) return -1;
+    char dir[512], lang[16], recap_lang[8], tts_lang[8], keywords[1024];
+    bool tts;
+
+    pthread_mutex_lock(&core->mutex);
+    snprintf(dir, sizeof(dir), "%s", (md_path && *md_path) ? md_path : core->current_md_path);
+    snprintf(lang, sizeof(lang), "%s", core->config.language);
+    snprintf(recap_lang, sizeof(recap_lang), "%s", core->config.recap_lang);
+    snprintf(tts_lang, sizeof(tts_lang), "%s", core->config.tts_lang);
+    snprintf(keywords, sizeof(keywords), "%s", core->config.keywords);
+    tts = core->config.recap_tts;
+    pthread_mutex_unlock(&core->mutex);
+
+    /* Only per-call folders are supported: <dir>/transcript.md */
+    const char *suffix = "/transcript.md";
+    size_t len = strlen(dir), slen = strlen(suffix);
+    if (len <= slen || strcmp(dir + len - slen, suffix) != 0) return -1;
+    dir[len - slen] = '\0';
+
+    char exe[512];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) return -1;
+    exe[n] = '\0';
+    char exe_copy[512];
+    snprintf(exe_copy, sizeof(exe_copy), "%s", exe);
+    char script[640], flac2wav[640];
+    snprintf(script, sizeof(script), "%s/../scripts/recap.py", dirname(exe));
+    snprintf(flac2wav, sizeof(flac2wav), "%s/flac2wav", dirname(exe_copy));
+
+    const char *home = getenv("HOME");
+    char log_path[640];
+    snprintf(log_path, sizeof(log_path), "%s/.local/share/ascolto/recap.log", (home && *home) ? home : "/tmp");
+
+    char recap_name[32], tts_name[32];
+    snprintf(recap_name, sizeof(recap_name), "%s", recap_language_name(recap_lang));
+    snprintf(tts_name, sizeof(tts_name), "%s", recap_language_name(tts_lang));
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        if (fork() != 0) _exit(0); /* double fork: the daemon never has to reap the pipeline */
+        setsid();
+        int devnull = open("/dev/null", O_RDONLY);
+        int logfd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (devnull >= 0) dup2(devnull, STDIN_FILENO);
+        if (logfd >= 0) { dup2(logfd, STDOUT_FILENO); dup2(logfd, STDERR_FILENO); }
+        const char *argv[28];
+        int a = 0;
+        argv[a++] = "python3";
+        argv[a++] = script;
+        argv[a++] = "--dir";
+        argv[a++] = dir;
+        argv[a++] = "--language";
+        argv[a++] = lang;
+        argv[a++] = "--recap-lang";
+        argv[a++] = recap_name;
+        argv[a++] = "--tts-lang";
+        argv[a++] = tts_name;
+        argv[a++] = "--keywords";
+        argv[a++] = keywords;
+        argv[a++] = "--flac2wav";
+        argv[a++] = flac2wav;
+        if (mp3_only) argv[a++] = "--mp3-only";
+        else if (tts) argv[a++] = "--tts";
+        argv[a] = NULL;
+        execvp("python3", (char *const *)argv);
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    char ev[640];
+    snprintf(ev, sizeof(ev), "\"dir\":\"%.480s\",\"tts\":%s,\"mp3_only\":%s", dir,
+             (tts || mp3_only) ? "true" : "false", mp3_only ? "true" : "false");
+    ascolto_obs_emit(&core->obs, "recap_started", ev);
+    return 0;
+}
+
+int ascolto_core_run_recap(ascolto_core_t *core, const char *md_path) {
+    return spawn_recap(core, md_path, false);
+}
+
+int ascolto_core_make_mp3(ascolto_core_t *core, const char *md_path) {
+    return spawn_recap(core, md_path, true);
+}
+
 static int start_session_unlocked(ascolto_core_t *core, ascolto_state_t target_state, const char *reason) {
     char mic_dev[128], sys_dev[128];
 
@@ -255,10 +358,21 @@ static int start_session_unlocked(ascolto_core_t *core, ascolto_state_t target_s
     strftime(ts_str, sizeof(ts_str), "%Y-%m-%d_%H-%M-%S", &tmv);
 
     core->session_id++;
-    snprintf(core->current_md_path, sizeof(core->current_md_path),
-             "%.400s/call_%s_%llu.md", core->config.output_dir, ts_str, (unsigned long long)core->session_id);
-    snprintf(core->current_jsonl_path, sizeof(core->current_jsonl_path),
-             "%.400s/call_%s_%llu.jsonl", core->config.output_dir, ts_str, (unsigned long long)core->session_id);
+    snprintf(core->current_session_dir, sizeof(core->current_session_dir),
+             "%.400s/call_%s_%llu", core->config.output_dir, ts_str, (unsigned long long)core->session_id);
+    mkdir_recursive(core->current_session_dir);
+    snprintf(core->current_md_path, sizeof(core->current_md_path), "%.480s/transcript.md", core->current_session_dir);
+    snprintf(core->current_jsonl_path, sizeof(core->current_jsonl_path), "%.480s/transcript.jsonl", core->current_session_dir);
+
+    for (int ch = 0; ch < 2; ch++) {
+        core->current_audio_path[ch][0] = '\0';
+        core->recorder[ch] = NULL;
+        if (!core->config.save_audio && !core->config.cloud_recap) continue;
+        snprintf(core->current_audio_path[ch], sizeof(core->current_audio_path[ch]),
+                 "%.480s/%s.flac", core->current_session_dir, ch == ASCOLTO_CHANNEL_MIC ? "mic" : "sys");
+        core->recorder[ch] = ascolto_audio_recorder_open(core->current_audio_path[ch]);
+        if (!core->recorder[ch]) core->current_audio_path[ch][0] = '\0';
+    }
 
     core->md_fp = fopen(core->current_md_path, "w");
     if (core->md_fp) {
@@ -270,6 +384,10 @@ static int start_session_unlocked(ascolto_core_t *core, ascolto_state_t target_s
                 ascolto_sensitivity_to_string(core->config.diarization_sensitivity));
         if (core->config.keywords[0]) {
             fprintf(core->md_fp, "- **Keywords**: `%s`\n", core->config.keywords);
+        }
+        if (core->recorder[ASCOLTO_CHANNEL_MIC] && core->recorder[ASCOLTO_CHANNEL_SYS]) {
+            fprintf(core->md_fp, "- **Audio**: `%s`, `%s`\n",
+                    core->current_audio_path[ASCOLTO_CHANNEL_MIC], core->current_audio_path[ASCOLTO_CHANNEL_SYS]);
         }
         fprintf(core->md_fp, "\n---\n\n");
         fflush(core->md_fp);
@@ -334,6 +452,16 @@ static int stop_session_unlocked(ascolto_core_t *core, const char *reason) {
     ascolto_core_flush_channel(core, ASCOLTO_CHANNEL_MIC);
     ascolto_core_flush_channel(core, ASCOLTO_CHANNEL_SYS);
 
+    ascolto_audio_recorder_t *recorders[2];
+    pthread_mutex_lock(&core->mutex);
+    for (int ch = 0; ch < 2; ch++) {
+        recorders[ch] = core->recorder[ch];
+        core->recorder[ch] = NULL;
+    }
+    pthread_mutex_unlock(&core->mutex);
+    bool had_audio = recorders[0] && recorders[1];
+    for (int ch = 0; ch < 2; ch++) ascolto_audio_recorder_close(recorders[ch]);
+
     pthread_mutex_lock(&core->mutex);
     if (core->md_fp) {
         fprintf(core->md_fp, "---\n\n*Sessione terminata (%s) - Interlocutori remoti rilevati: %d*\n",
@@ -348,7 +476,11 @@ static int stop_session_unlocked(ascolto_core_t *core, const char *reason) {
     uint64_t sid = core->session_id;
     int spk_cnt = core->diarizer.speaker_count;
     uint64_t tot_seg = core->total_segments;
+    bool run_recap = core->config.cloud_recap && had_audio;
+    char recap_md[512];
+    snprintf(recap_md, sizeof(recap_md), "%s", core->current_md_path);
     pthread_mutex_unlock(&core->mutex);
+    if (run_recap) ascolto_core_run_recap(core, recap_md);
 
     ascolto_tray_update(&core->tray);
 
@@ -494,6 +626,71 @@ int ascolto_core_set_auto_mic(ascolto_core_t *core, bool enabled) {
     return 0;
 }
 
+int ascolto_core_set_save_audio(ascolto_core_t *core, bool enabled) {
+    if (!core) return -1;
+    pthread_mutex_lock(&core->mutex);
+    core->config.save_audio = enabled;
+    ascolto_config_save(&core->config, NULL);
+    char ev[64];
+    snprintf(ev, sizeof(ev), "\"save_audio\":%s", enabled ? "true" : "false");
+    ascolto_obs_emit(&core->obs, "config_save_audio_changed", ev);
+    pthread_mutex_unlock(&core->mutex);
+    ascolto_tray_update(&core->tray);
+    return 0;
+}
+
+int ascolto_core_set_cloud_recap(ascolto_core_t *core, bool enabled) {
+    if (!core) return -1;
+    pthread_mutex_lock(&core->mutex);
+    core->config.cloud_recap = enabled;
+    ascolto_config_save(&core->config, NULL);
+    char ev[64];
+    snprintf(ev, sizeof(ev), "\"cloud_recap\":%s", enabled ? "true" : "false");
+    ascolto_obs_emit(&core->obs, "config_cloud_recap_changed", ev);
+    pthread_mutex_unlock(&core->mutex);
+    ascolto_tray_update(&core->tray);
+    return 0;
+}
+
+int ascolto_core_set_recap_tts(ascolto_core_t *core, bool enabled) {
+    if (!core) return -1;
+    pthread_mutex_lock(&core->mutex);
+    core->config.recap_tts = enabled;
+    ascolto_config_save(&core->config, NULL);
+    char ev[64];
+    snprintf(ev, sizeof(ev), "\"recap_tts\":%s", enabled ? "true" : "false");
+    ascolto_obs_emit(&core->obs, "config_recap_tts_changed", ev);
+    pthread_mutex_unlock(&core->mutex);
+    ascolto_tray_update(&core->tray);
+    return 0;
+}
+
+int ascolto_core_set_recap_lang(ascolto_core_t *core, const char *lang) {
+    if (!core || !lang || !*lang) return -1;
+    pthread_mutex_lock(&core->mutex);
+    snprintf(core->config.recap_lang, sizeof(core->config.recap_lang), "%s", lang);
+    ascolto_config_save(&core->config, NULL);
+    char ev[64];
+    snprintf(ev, sizeof(ev), "\"recap_lang\":\"%s\"", core->config.recap_lang);
+    ascolto_obs_emit(&core->obs, "config_recap_lang_changed", ev);
+    pthread_mutex_unlock(&core->mutex);
+    ascolto_tray_update(&core->tray);
+    return 0;
+}
+
+int ascolto_core_set_tts_lang(ascolto_core_t *core, const char *lang) {
+    if (!core || !lang || !*lang) return -1;
+    pthread_mutex_lock(&core->mutex);
+    snprintf(core->config.tts_lang, sizeof(core->config.tts_lang), "%s", lang);
+    ascolto_config_save(&core->config, NULL);
+    char ev[64];
+    snprintf(ev, sizeof(ev), "\"tts_lang\":\"%s\"", core->config.tts_lang);
+    ascolto_obs_emit(&core->obs, "config_tts_lang_changed", ev);
+    pthread_mutex_unlock(&core->mutex);
+    ascolto_tray_update(&core->tray);
+    return 0;
+}
+
 int ascolto_core_set_language(ascolto_core_t *core, const char *lang) {
     if (!core || !lang) return -1;
     pthread_mutex_lock(&core->mutex);
@@ -635,6 +832,7 @@ void ascolto_core_ingest_audio(
         pthread_mutex_unlock(&core->mutex);
         return;
     }
+    ascolto_audio_recorder_t *rec = core->recorder[channel];
 
     double energy = 0.0;
     for (size_t i = 0; i < num_samples; i++) {
@@ -681,6 +879,7 @@ void ascolto_core_ingest_audio(
     core->session_audio_sec[channel] += chunk_dur;
     pthread_mutex_unlock(&core->mutex);
 
+    if (rec) ascolto_audio_recorder_write(rec, pcm_16k, num_samples);
     if (should_flush) {
         ascolto_core_flush_channel(core, channel);
     }

@@ -44,7 +44,12 @@ typedef struct {
 
 typedef struct {
     bool auto_mic_trigger;
+    bool save_audio;
+    bool cloud_recap;
+    bool recap_tts;
     char language[16];
+    char recap_lang[8];
+    char tts_lang[8];
     char mic_device[128];
     char sys_device[128];
     ascolto_sensitivity_t diarization_sensitivity;
