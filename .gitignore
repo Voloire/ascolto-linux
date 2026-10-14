@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.a
+*.so
+*.d
+
+# Coverage and sanitizer outputs
+*.gcda
+*.gcno
+*.gcov
+asan.log*
+ubsan.log*
+
+# Model weights and large audio fixtures (unless explicitly tracked)
+third_party/whistle/*.cact
+*.wav.raw
+
+# Runtime sockets, logs, and temporary files
+*.sock
+*.pid
+/tmp/
+.DS_Store
