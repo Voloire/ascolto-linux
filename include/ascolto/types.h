@@ -62,6 +62,19 @@ typedef struct {
     char telemetry_log[512];
     int mic_debounce_ms;
     bool headless;
+    bool mock_engine;
+    char database_path[512];
+    char appearance[16];
+    char recap_provider[32];
+    char recap_model[128];
+    char opencode_path[512];
+    char openai_credential[256];
+    char openrouter_credential[256];
+    char stt_model[128];
+    char tts_model[128];
+    char tts_voice[64];
+    bool cloud_transcription;
+    bool launch_at_login;
 } ascolto_config_t;
 
 typedef struct {

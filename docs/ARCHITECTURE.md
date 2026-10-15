@@ -1,33 +1,33 @@
-# Architecture and Implementation Plan
+# Ascolto architecture
 
-## 1. Target Environment Baseline
+Ascolto is a native C/GTK 3 Linux application. PipeWire capture, local Whistle inference, speaker clustering, and transcript/FLAC recording run behind the existing core interfaces. A Unix control socket exposes the same session operations to the CLI and autonomous harness.
 
-Inspected on host `voloire-XPS`:
+## Desktop surfaces
 
-- **OS**: Ubuntu 26.04.1 LTS (Resolute Raccoon), Kernel `7.0.0-38-generic` x86_64
-- **CPU / Memory**: Intel Core i7-8550U (4 cores / 8 threads @ 1.80 GHz, AVX2), 14 GiB RAM
-- **Desktop**: GNOME Shell 50.1 on Wayland (`ubuntu:GNOME`), extension `ubuntu-appindicators@ubuntu.com` enabled
-- **Audio Stack**: PipeWire 1.6.2 + WirePlumber 1.6.2 (`pw-dump`, `pw-record`, `pw-play`, `wpctl`, `libpipewire-0.3`, `libpulse0`)
-- **Toolchain & Dev Packages**: `gcc` 15.2.0, `make`, `pkg-config`, `libglib2.0-dev`, `libgio-2.0-dev`, `libjson-glib-dev`, `libavcodec-dev`, `libavformat-dev`, `libavutil-dev`, plus runtime libraries `libgtk-3-0t64` and `libayatana-appindicator3-1`
+The GNOME AppIndicator menu contains session controls, current status/timer, background-job activity, recent session folders, recap/speech actions, Settings, and Quit. Menu appearance belongs to GNOME. The dedicated GTK Settings window provides General, Transcription, Recording, Storage, OpenCode, OpenRouter, and OpenAI pages with Ubuntu typography and system/light/dark appearance.
 
-## 2. Modular Architecture
+The desktop launcher opens Settings. Explicit Start/Stop actions still operate the session. Closing Settings hides the window and leaves the daemon running. Settings are validated as a batch, saved, and deferred until recording closes. The main GTK thread applies them at the idle boundary; model-path changes reload Whistle there.
 
-`ascolto` is structured around clean C vtable interfaces so that every subsystem can run against either production Linux backends or deterministic test-harness backends:
+## Persistence
 
-1. **`ascolto_core`**: finite state machine (`IDLE`, `RECORDING_AUTO`, `RECORDING_MANUAL`, `PAUSED`), session lifecycle, configuration persistence (`~/.config/ascolto/config.ini`), and transcript writer.
-2. **`mic_watcher`**: monitors PipeWire / PulseAudio graph changes to detect active capture streams from third-party applications (excluding `ascolto` itself) with configurable start/stop debounce.
-3. **`audio_capture`**: dual 16 kHz mono PCM capture streams:
-   - `MIC` channel from the selected microphone source.
-   - `SYS` channel from the selected sink monitor source.
-4. **`whistle_engine`**: C wrapper around Cactus Compute Whistle (`needle.h`, `libneedle.a`, `whistle.cact`) providing streaming transcription, language selection, custom keyword boosting, and per-segment speech embedding extraction.
-5. **`speaker_diarizer`**: deterministic `ME` assignment on `MIC` segments and online L2-normalized cosine similarity clustering with exponential moving average centroids on `SYS` embeddings to label `SPEAKER_1`, `SPEAKER_2`, ..., `SPEAKER_N`.
-6. **`tray_ui`**: GNOME top bar integration over D-Bus (`org.kde.StatusNotifierItem` and `com.canonical.dbusmenu` / `libayatana-appindicator3`) displaying live status and timer (`MM:SS`) and exposing all configuration controls.
-7. **`observability`**: structured JSONL event bus and Unix domain control socket (`/run/user/<uid>/ascolto.sock` or configurable path) used by `ascoltoctl` and automated tests.
+`~/.local/share/ascolto/ascolto.db` contains schema-versioned SQLite tables for preferences, sessions, speakers, segments, artifacts, and AI jobs. WAL and foreign keys are enabled. Provider and task-selection settings live in the preferences JSON; each job receives an immutable copy, rather than consulting mutable preferences during execution.
 
-## 3. Delivery Phases
+On first startup, existing INI preferences are imported without deleting the source. On later startups the database is authoritative. `--config <path>` explicitly imports that INI into an isolated `<path>.db`, useful for distinct profiles. Command-line overrides apply after loading. Saving Settings persists the resulting effective preference values.
 
-1. **Phase 1 - Test Harness & Observability**: event bus, Unix control socket, mock audio/trigger/UI backends, multi-speaker call simulator, and automated unit + E2E test runner.
-2. **Phase 2 - Whistle Engine & Speaker Diarizer**: integration with `needle.h` / `libneedle.a` / `whistle.cact`, dual-stream segment merger, and cosine speaker clustering.
-3. **Phase 3 - PipeWire Audio & Auto-Trigger Backend**: live microphone activity detection and dual-channel capture (MIC + SYS monitor).
-4. **Phase 4 - GNOME Top Bar Indicator & Configuration**: tray icon, live timer, menu items, custom keywords dialog, and transcript management.
-5. **Phase 5 - End-to-End Verification**: full test suite execution and sanitizer checks.
+Session folders remain on disk. While idle, the index discovers existing `call_*` folders and their artifacts and imports valid segment/speaker metadata idempotently. Legacy malformed JSONL lines are skipped without altering the source. Stable SQLite session IDs are independent of the process-local session counter. New output folders apply only to future sessions; existing folders are neither moved nor deleted.
+
+## Background work
+
+The C core supervises up to eight worker processes. SQLite prevents concurrent jobs for the same session. Each Python worker receives a job ID and reads its configuration snapshot. The daemon reaps workers, records success/failure, and emits lifecycle telemetry. Workers use dedicated process groups and a parent-death signal. Startup marks abandoned jobs interrupted; retry is explicit.
+
+The pipeline supports optional OpenAI cloud retranscription, recap through Claude CLI/OpenCode CLI/OpenRouter, and optional OpenAI speech generation. Local Whistle remains the live transcription engine. Cloud transcription writes `transcript.cloud.md`; it does not replace `transcript.md` or delete `transcript.jsonl`. Generated artifacts are published through private temporary files and atomic rename. If a later stage fails, already published artifacts remain available and the job is marked failed.
+
+Credential values are resolved at execution time from environment variables or 1Password references. Only references enter SQLite. OpenCode uses a dedicated agent, denied tools, disabled sharing, an isolated working directory, JSON event output, and `--pure`. Claude runs without tools or session persistence. Recap adapters receive locally scrubbed transcripts and a prompt that treats transcript instructions as data.
+
+Provider contracts follow [OpenCode permissions](https://opencode.ai/docs/permissions/), [OpenCode configuration](https://opencode.ai/docs/config/), and the [OpenRouter chat completion API](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion). Connection tests are explicit user actions; readiness checks do not prove that every selected model is available.
+
+## Control and diagnostics
+
+Existing commands remain available. Added commands are `OPEN_SETTINGS`, `GET_SETTINGS`, `UPDATE_SETTINGS <json>`, `GET_PROVIDER_STATUS`, `LIST_SESSIONS`, `LIST_JOBS`, `RETRY_JOB <id>`, and `DIAGNOSTICS`. `STATUS` includes pending settings and active background-job count. `GET_EVENTS` supports a sequence cursor and reports dropped history.
+
+The recording states remain `IDLE`, `RECORDING_AUTO`, `RECORDING_MANUAL`, and `PAUSED`. AI job state is separate. Test injection is available only with the mock audio backend. See [the test harness guide](TESTING.md) for evidence formats, isolation, fixtures, and reproducible commands.

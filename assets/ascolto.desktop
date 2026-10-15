@@ -1,8 +1,8 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Ascolto Call Transcriber
-Comment=Avvia Ascolto e inizia subito la trascrizione dual-channel (MIC + SYS) con Whistle
+Name=Ascolto
+Comment=Open Ascolto settings and manage conversations
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh app
 Path=/home/voloirex/ascolto-linux
 Icon=/home/voloirex/ascolto-linux/assets/ascolto-icon.svg
@@ -12,21 +12,21 @@ StartupNotify=false
 Actions=StartNow;StopNow;PauseResume;OpenTranscripts;QuitDaemon;
 
 [Desktop Action StartNow]
-Name=Avvia Trascrizione Manuale
+Name=Start recording
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh start
 
 [Desktop Action StopNow]
-Name=Ferma Trascrizione
+Name=Stop recording
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh stop
 
 [Desktop Action PauseResume]
-Name=Metti in Pausa
+Name=Pause or resume
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh pause
 
 [Desktop Action OpenTranscripts]
-Name=Apri Cartella Trascrizioni
+Name=Open transcripts folder
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh open-folder
 
 [Desktop Action QuitDaemon]
-Name=Termina Demone Ascolto
+Name=Quit Ascolto
 Exec=/home/voloirex/ascolto-linux/scripts/launch_ascolto.sh quit

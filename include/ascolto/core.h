@@ -27,6 +27,16 @@ typedef struct {
 
 struct ascolto_core {
     ascolto_config_t config;
+    ascolto_config_t pending_config;
+    bool has_pending_config;
+    bool session_closing;
+    bool mock_capture_failure;
+    bool show_settings;
+    int worker_pid[8];
+    long worker_job[8];
+    uint64_t last_index_ms;
+    uint64_t audio_samples[2], dropped_samples[2];
+    double audio_rms[2];
     ascolto_state_t state;
     ascolto_state_t pre_pause_state;
     bool running;

@@ -1,0 +1,16 @@
+{
+  "name": "Three-person architecture call",
+  "participants": {
+    "local": {"channel": "MIC", "voice": [135, 500, 1500], "speaker": "ME"},
+    "alex": {"channel": "SYS", "voice": [98, 420, 1180], "speaker": "SPEAKER_1"},
+    "sam": {"channel": "SYS", "voice": [235, 740, 2200], "speaker": "SPEAKER_2"}
+  },
+  "turns": [
+    {"participant": "local", "text": "Let's review the audio architecture.", "duration_ms": 1000},
+    {"participant": "alex", "text": "Both recording channels are ready.", "duration_ms": 1200},
+    {"participant": "sam", "text": "I checked the speaker separation.", "duration_ms": 1200},
+    {"participant": "alex", "text": "We should preserve the original transcript.", "duration_ms": 1200},
+    {"participant": "local", "text": "The path is C:\\notes and the title is \"Review\".", "duration_ms": 1000},
+    {"participant": "sam", "text": "Agreed. Let's publish the recap locally.", "duration_ms": 1200}
+  ]
+}

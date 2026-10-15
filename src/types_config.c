@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ascolto/types.h"
+#include "ascolto/settings.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,6 +90,16 @@ void ascolto_config_init_defaults(ascolto_config_t *cfg) {
     cfg->keywords[0] = '\0';
     cfg->mic_debounce_ms = 600;
     cfg->headless = false;
+    strcpy(cfg->appearance, "system");
+    strcpy(cfg->recap_provider, "claude");
+    strcpy(cfg->recap_model, "opus");
+    strcpy(cfg->opencode_path, "opencode");
+    strcpy(cfg->openai_credential, "env:OPENAI_API_KEY");
+    strcpy(cfg->openrouter_credential, "env:OPENROUTER_API_KEY");
+    strcpy(cfg->stt_model, "gpt-transcribe");
+    strcpy(cfg->tts_model, "gpt-4o-mini-tts");
+    strcpy(cfg->tts_voice, "onyx");
+    cfg->cloud_transcription = true;
 
     const char *home = getenv("HOME");
     if (!home || !*home) home = "/tmp";
@@ -173,6 +184,7 @@ int ascolto_config_load(ascolto_config_t *cfg, const char *path) {
 
 int ascolto_config_save(const ascolto_config_t *cfg, const char *path) {
     if (!cfg) return -1;
+    if (cfg->database_path[0] && !path) return ascolto_settings_save(cfg);
     const char *target = (path && *path) ? path : cfg->config_path;
     char dir_buf[512];
     snprintf(dir_buf, sizeof(dir_buf), "%s", target);
