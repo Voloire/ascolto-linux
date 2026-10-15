@@ -1,7 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ascolto/core.h"
-#include <libavformat/avformat.h>
 #include <assert.h>
+#include <glib.h>
+#include <libavformat/avformat.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,19 +12,47 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+static char *test_root;
+static GPtrArray *test_paths;
+static const char *test_path(const char *relative) {
+    char *path = g_build_filename(test_root, relative, NULL);
+    g_ptr_array_add(test_paths, path);
+    return path;
+}
+static char *expand_command(const char *command) {
+    char **parts = g_strsplit(command, "/tmp/opencode", -1);
+    char *out = g_strjoinv(test_root, parts);
+    g_strfreev(parts);
+    return out;
+}
+static int test_system(const char *command) {
+    char *expanded = expand_command(command);
+    int rc = system(expanded);
+    g_free(expanded);
+    return rc;
+}
+static FILE *test_popen(const char *command, const char *mode) {
+    char *expanded = expand_command(command);
+    FILE *fp = popen(expanded, mode);
+    g_free(expanded);
+    return fp;
+}
+
 static int g_tests_run = 0;
 static int g_tests_passed = 0;
 
-#define ASSERT_TRUE(cond, msg) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "  [FAIL] %s:%d: %s\n", __FILE__, __LINE__, msg); \
-        return -1; \
-    } \
-} while (0)
+#define ASSERT_TRUE(cond, msg)                                                                               \
+    do {                                                                                                     \
+        if (!(cond)) {                                                                                       \
+            fprintf(stderr, "  [FAIL] %s:%d: %s\n", __FILE__, __LINE__, msg);                                \
+            return -1;                                                                                       \
+        }                                                                                                    \
+    } while (0)
 
 static int send_ipc_cmd(const char *sock_path, const char *cmd, char *reply, size_t reply_cap) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0)
+        return -1;
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -52,8 +81,8 @@ static int test_config_persistence(void) {
     printf("[TEST 1] Config initialization, serialization, and reload...\n");
     ascolto_config_t cfg1, cfg2;
     ascolto_config_init_defaults(&cfg1);
-    snprintf(cfg1.config_path, sizeof(cfg1.config_path), "/tmp/opencode/ascolto_test_config.ini");
-    snprintf(cfg1.output_dir, sizeof(cfg1.output_dir), "/tmp/opencode/ascolto_test_transcripts");
+    snprintf(cfg1.config_path, sizeof(cfg1.config_path), "%s", test_path("ascolto_test_config.ini"));
+    snprintf(cfg1.output_dir, sizeof(cfg1.output_dir), "%s", test_path("ascolto_test_transcripts"));
     cfg1.auto_mic_trigger = false;
     snprintf(cfg1.language, sizeof(cfg1.language), "it");
     snprintf(cfg1.mic_device, sizeof(cfg1.mic_device), "usb_headset_mic");
@@ -70,7 +99,8 @@ static int test_config_persistence(void) {
     ASSERT_TRUE(strcmp(cfg2.mic_device, "usb_headset_mic") == 0, "mic_device mismatch");
     ASSERT_TRUE(strcmp(cfg2.sys_device, "hdmi_monitor") == 0, "sys_device mismatch");
     ASSERT_TRUE(cfg2.diarization_sensitivity == ASCOLTO_SENSITIVITY_HIGH, "sensitivity mismatch");
-    ASSERT_TRUE(strcmp(cfg2.keywords, "Bitrock, Cactus Compute, Whistle, PipeWire") == 0, "keywords mismatch");
+    ASSERT_TRUE(strcmp(cfg2.keywords, "Bitrock, Cactus Compute, Whistle, PipeWire") == 0,
+                "keywords mismatch");
     printf("  -> PASS\n");
     return 0;
 }
@@ -96,7 +126,7 @@ static int test_whistle_engine_and_wav_io(void) {
     /* Test WAV write and read round-trip */
     float voice[16000];
     ascolto_synth_voice_utterance(voice, 16000, 130.0f, 520.0f, 1480.0f, 2500.0f);
-    const char *wav_path = "/tmp/opencode/ascolto_test_voice.wav";
+    const char *wav_path = test_path("ascolto_test_voice.wav");
     ASSERT_TRUE(ascolto_wav_write_16k_mono(wav_path, voice, 16000) == 0, "wav write failed");
 
     float *loaded = NULL;
@@ -110,11 +140,14 @@ static int test_whistle_engine_and_wav_io(void) {
     if (access(real_wav, R_OK) == 0) {
         float *speech_pcm = NULL;
         size_t speech_n = 0;
-        ASSERT_TRUE(ascolto_wav_load_16k_mono(real_wav, &speech_pcm, &speech_n) == 0, "failed to load Front_Center.wav");
+        ASSERT_TRUE(ascolto_wav_load_16k_mono(real_wav, &speech_pcm, &speech_n) == 0,
+                    "failed to load Front_Center.wav");
         ascolto_whistle_result_t sres;
-        ASSERT_TRUE(ascolto_whistle_process_segment(&eng, speech_pcm, speech_n, "en", "Front, Center", NULL, &sres) == 0,
+        ASSERT_TRUE(ascolto_whistle_process_segment(&eng, speech_pcm, speech_n, "en", "Front, Center", NULL,
+                                                    &sres) == 0,
                     "whistle transcribe failed on Front_Center.wav");
-        printf("  Real speech WAV ('Front_Center.wav', %zu samples @ 16kHz) -> text=\"%s\" (lang=%s, ttft=%.1f ms, decode=%.1f tok/s)\n",
+        printf("  Real speech WAV ('Front_Center.wav', %zu samples @ 16kHz) -> text=\"%s\" (lang=%s, "
+               "ttft=%.1f ms, decode=%.1f tok/s)\n",
                speech_n, sres.text, sres.language, sres.ttft_ms, sres.decode_tps);
         ASSERT_TRUE(strlen(sres.text) > 0, "Whistle returned empty transcript on real speech WAV");
         ascolto_whistle_result_free(&sres);
@@ -127,7 +160,8 @@ static int test_whistle_engine_and_wav_io(void) {
 }
 
 static int test_hybrid_speaker_diarization(void) {
-    printf("[TEST 3] Hybrid speaker diarization (MIC='ME' + SYS multi-speaker clustering with Whistle embeddings)...\n");
+    printf("[TEST 3] Hybrid speaker diarization (MIC='ME' + SYS multi-speaker clustering with Whistle "
+           "embeddings)...\n");
     ascolto_whistle_engine_t eng;
     ASSERT_TRUE(ascolto_whistle_init(&eng, "third_party/whistle/whistle.cact") == 0, "whistle init failed");
 
@@ -135,7 +169,7 @@ static int test_hybrid_speaker_diarization(void) {
     ascolto_diarizer_init(&diar, ASCOLTO_SENSITIVITY_MEDIUM);
 
     size_t n_samples = 24000; /* 1.5s at 16 kHz */
-    float *pcm_me   = (float *)calloc(n_samples, sizeof(float));
+    float *pcm_me = (float *)calloc(n_samples, sizeof(float));
     float *pcm_spk1 = (float *)calloc(n_samples, sizeof(float));
     float *pcm_spk2 = (float *)calloc(n_samples, sizeof(float));
     float *pcm_spk3 = (float *)calloc(n_samples, sizeof(float));
@@ -143,41 +177,47 @@ static int test_hybrid_speaker_diarization(void) {
     float *pcm_spk2_b = (float *)calloc(n_samples, sizeof(float));
 
     /* Distinct vocal profiles (F0 + Formants F1, F2, F3) */
-    ascolto_synth_voice_utterance(pcm_me,     n_samples, 135.0f, 500.0f, 1500.0f, 2500.0f);
-    ascolto_synth_voice_utterance(pcm_spk1,   n_samples,  98.0f, 420.0f, 1180.0f, 2250.0f); /* Deep baritone */
-    ascolto_synth_voice_utterance(pcm_spk2,   n_samples, 172.0f, 620.0f, 1850.0f, 2850.0f); /* Tenor / Alto */
-    ascolto_synth_voice_utterance(pcm_spk3,   n_samples, 255.0f, 780.0f, 2320.0f, 3300.0f); /* Soprano */
+    ascolto_synth_voice_utterance(pcm_me, n_samples, 135.0f, 500.0f, 1500.0f, 2500.0f);
+    ascolto_synth_voice_utterance(pcm_spk1, n_samples, 98.0f, 420.0f, 1180.0f, 2250.0f);  /* Deep baritone */
+    ascolto_synth_voice_utterance(pcm_spk2, n_samples, 172.0f, 620.0f, 1850.0f, 2850.0f); /* Tenor / Alto */
+    ascolto_synth_voice_utterance(pcm_spk3, n_samples, 255.0f, 780.0f, 2320.0f, 3300.0f); /* Soprano */
     /* Second utterances from Speaker 1 and Speaker 2 with slight natural variation */
     ascolto_synth_voice_utterance(pcm_spk1_b, n_samples, 100.0f, 430.0f, 1195.0f, 2260.0f);
     ascolto_synth_voice_utterance(pcm_spk2_b, n_samples, 169.0f, 610.0f, 1835.0f, 2830.0f);
 
     ascolto_whistle_result_t wr;
     float emb_me[ASCOLTO_EMBED_DIM], emb_1[ASCOLTO_EMBED_DIM], emb_2[ASCOLTO_EMBED_DIM],
-          emb_3[ASCOLTO_EMBED_DIM], emb_1b[ASCOLTO_EMBED_DIM], emb_2b[ASCOLTO_EMBED_DIM];
+        emb_3[ASCOLTO_EMBED_DIM], emb_1b[ASCOLTO_EMBED_DIM], emb_2b[ASCOLTO_EMBED_DIM];
     float f0_me, f0_1, f0_2, f0_3, f0_1b, f0_2b, rms;
 
     ascolto_whistle_process_segment(&eng, pcm_me, n_samples, "it", NULL, "Ciao sono io", &wr);
-    ascolto_diarizer_compute_embedding(pcm_me, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_me, &f0_me, &rms);
+    ascolto_diarizer_compute_embedding(pcm_me, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_me, &f0_me, &rms);
     ascolto_whistle_result_free(&wr);
 
     ascolto_whistle_process_segment(&eng, pcm_spk1, n_samples, "it", NULL, "Buongiorno da speaker uno", &wr);
-    ascolto_diarizer_compute_embedding(pcm_spk1, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_1, &f0_1, &rms);
+    ascolto_diarizer_compute_embedding(pcm_spk1, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_1, &f0_1, &rms);
     ascolto_whistle_result_free(&wr);
 
     ascolto_whistle_process_segment(&eng, pcm_spk2, n_samples, "it", NULL, "Buongiorno da speaker due", &wr);
-    ascolto_diarizer_compute_embedding(pcm_spk2, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_2, &f0_2, &rms);
+    ascolto_diarizer_compute_embedding(pcm_spk2, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_2, &f0_2, &rms);
     ascolto_whistle_result_free(&wr);
 
     ascolto_whistle_process_segment(&eng, pcm_spk3, n_samples, "it", NULL, "Buongiorno da speaker tre", &wr);
-    ascolto_diarizer_compute_embedding(pcm_spk3, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_3, &f0_3, &rms);
+    ascolto_diarizer_compute_embedding(pcm_spk3, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_3, &f0_3, &rms);
     ascolto_whistle_result_free(&wr);
 
     ascolto_whistle_process_segment(&eng, pcm_spk1_b, n_samples, "it", NULL, "Ancora speaker uno", &wr);
-    ascolto_diarizer_compute_embedding(pcm_spk1_b, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_1b, &f0_1b, &rms);
+    ascolto_diarizer_compute_embedding(pcm_spk1_b, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_1b, &f0_1b, &rms);
     ascolto_whistle_result_free(&wr);
 
     ascolto_whistle_process_segment(&eng, pcm_spk2_b, n_samples, "it", NULL, "Ancora speaker due", &wr);
-    ascolto_diarizer_compute_embedding(pcm_spk2_b, n_samples, wr.frame_embeddings, wr.frame_embedding_floats, wr.frame_embedding_dim, emb_2b, &f0_2b, &rms);
+    ascolto_diarizer_compute_embedding(pcm_spk2_b, n_samples, wr.frame_embeddings, wr.frame_embedding_floats,
+                                       wr.frame_embedding_dim, emb_2b, &f0_2b, &rms);
     ascolto_whistle_result_free(&wr);
 
     char label[32];
@@ -222,13 +262,14 @@ static int test_hybrid_speaker_diarization(void) {
 }
 
 static int test_e2e_multispeaker_call_and_ipc_observability(void) {
-    printf("[TEST 4] End-to-End multi-speaker call simulation, Mic Auto-Trigger, Tray UI, and IPC Socket...\n");
+    printf(
+        "[TEST 4] End-to-End multi-speaker call simulation, Mic Auto-Trigger, Tray UI, and IPC Socket...\n");
     ascolto_config_t cfg;
     ascolto_config_init_defaults(&cfg);
-    snprintf(cfg.config_path, sizeof(cfg.config_path), "/tmp/opencode/ascolto_e2e_config.ini");
-    snprintf(cfg.output_dir, sizeof(cfg.output_dir), "/tmp/opencode/ascolto_e2e_transcripts");
-    snprintf(cfg.control_socket, sizeof(cfg.control_socket), "/tmp/opencode/ascolto_e2e.sock");
-    snprintf(cfg.telemetry_log, sizeof(cfg.telemetry_log), "/tmp/opencode/ascolto_e2e_events.jsonl");
+    snprintf(cfg.config_path, sizeof(cfg.config_path), "%s", test_path("ascolto_e2e_config.ini"));
+    snprintf(cfg.output_dir, sizeof(cfg.output_dir), "%s", test_path("ascolto_e2e_transcripts"));
+    snprintf(cfg.control_socket, sizeof(cfg.control_socket), "%s", test_path("ascolto_e2e.sock"));
+    snprintf(cfg.telemetry_log, sizeof(cfg.telemetry_log), "%s", test_path("ascolto_e2e_events.jsonl"));
     snprintf(cfg.weights_path, sizeof(cfg.weights_path), "third_party/whistle/whistle.cact");
     snprintf(cfg.language, sizeof(cfg.language), "it");
     snprintf(cfg.keywords, sizeof(cfg.keywords), "Bitrock, Whistle, PipeWire");
@@ -246,83 +287,109 @@ static int test_e2e_multispeaker_call_and_ipc_observability(void) {
     ASSERT_TRUE(strstr(reply, "\"whistle_loaded\":true") != NULL, "Expected whistle_loaded:true");
 
     /* 2. Simulate Zoom activating microphone -> must auto-trigger RECORDING_AUTO */
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SIM_MIC_ACTIVE 1 Zoom", reply, sizeof(reply)) == 0, "IPC SIM_MIC_ACTIVE 1 failed");
-    ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_AUTO\"") != NULL, "Expected auto transition to RECORDING_AUTO");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SIM_MIC_ACTIVE 1 Zoom", reply, sizeof(reply)) == 0,
+                "IPC SIM_MIC_ACTIVE 1 failed");
+    ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_AUTO\"") != NULL,
+                "Expected auto transition to RECORDING_AUTO");
 
     /* 3. Verify Tray UI state reflects active recording */
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "GET_TRAY_STATE", reply, sizeof(reply)) == 0, "IPC GET_TRAY_STATE failed");
-    ASSERT_TRUE(strstr(reply, "\"recording\":true") != NULL && strstr(reply, "REC ") != NULL, "Tray UI should show REC timer");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "GET_TRAY_STATE", reply, sizeof(reply)) == 0,
+                "IPC GET_TRAY_STATE failed");
+    ASSERT_TRUE(strstr(reply, "\"recording\":true") != NULL && strstr(reply, "REC ") != NULL,
+                "Tray UI should show REC timer");
 
     /* 4. Inject a 5-turn multi-speaker conversation across MIC and SYS channels */
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH MIC 135 500 1500 1000 Ciao a tutti, iniziamo la call di architettura su PipeWire e Whistle.",
-                reply, sizeof(reply)) == 0, "Turn 1 failed");
+                             "INJECT_SYNTH_SPEECH MIC 135 500 1500 1000 Ciao a tutti, iniziamo la call di "
+                             "architettura su PipeWire e Whistle.",
+                             reply, sizeof(reply)) == 0,
+                "Turn 1 failed");
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH SYS 98 420 1180 1200 Ciao Franco, qui Marco: il backend audio dual-channel funziona bene.",
-                reply, sizeof(reply)) == 0, "Turn 2 failed");
+                             "INJECT_SYNTH_SPEECH SYS 98 420 1180 1200 Ciao Franco, qui Marco: il backend "
+                             "audio dual-channel funziona bene.",
+                             reply, sizeof(reply)) == 0,
+                "Turn 2 failed");
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH SYS 235 740 2200 1200 Qui Giulia: ho verificato gli speech embedding e la diarizzazione.",
-                reply, sizeof(reply)) == 0, "Turn 3 failed");
+                             "INJECT_SYNTH_SPEECH SYS 235 740 2200 1200 Qui Giulia: ho verificato gli speech "
+                             "embedding e la diarizzazione.",
+                             reply, sizeof(reply)) == 0,
+                "Turn 3 failed");
 
     /* Test PAUSE and RESUME mid-call */
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "PAUSE", reply, sizeof(reply)) == 0, "IPC PAUSE failed");
     ASSERT_TRUE(strstr(reply, "\"state\":\"PAUSED\"") != NULL, "Expected PAUSED state");
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "GET_TRAY_STATE", reply, sizeof(reply)) == 0, "IPC GET_TRAY_STATE failed");
-    ASSERT_TRUE(strstr(reply, "\"paused\":true") != NULL && strstr(reply, "PAUSA ") != NULL, "Tray should show PAUSA");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "GET_TRAY_STATE", reply, sizeof(reply)) == 0,
+                "IPC GET_TRAY_STATE failed");
+    ASSERT_TRUE(strstr(reply, "\"paused\":true") != NULL && strstr(reply, "PAUSED ") != NULL,
+                "Tray should show PAUSED");
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "RESUME", reply, sizeof(reply)) == 0, "IPC RESUME failed");
     ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_AUTO\"") != NULL, "Expected resume to RECORDING_AUTO");
 
     /* Speaker 1 (Marco) and ME and Speaker 2 (Giulia) speak again */
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH SYS 100 425 1190 1200 Confermo che anche il trigger automatico sul microfono e stabile.",
-                reply, sizeof(reply)) == 0, "Turn 4 failed");
+                             "INJECT_SYNTH_SPEECH SYS 100 425 1190 1200 Confermo che anche il trigger "
+                             "automatico sul microfono e stabile.",
+                             reply, sizeof(reply)) == 0,
+                "Turn 4 failed");
+    ASSERT_TRUE(
+        send_ipc_cmd(cfg.control_socket,
+                     "INJECT_SYNTH_SPEECH MIC 136 505 1510 1000 Ottimo lavoro, salviamo la trascrizione.",
+                     reply, sizeof(reply)) == 0,
+        "Turn 5 failed");
     ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH MIC 136 505 1510 1000 Ottimo lavoro, salviamo la trascrizione.",
-                reply, sizeof(reply)) == 0, "Turn 5 failed");
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket,
-                "INJECT_SYNTH_SPEECH SYS 232 730 2180 1200 Perfetto, a dopo!",
-                reply, sizeof(reply)) == 0, "Turn 6 failed");
+                             "INJECT_SYNTH_SPEECH SYS 232 730 2180 1200 Perfetto, a dopo!", reply,
+                             sizeof(reply)) == 0,
+                "Turn 6 failed");
 
     /* 5. Inspect speakers & segments via IPC */
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "LIST_SPEAKERS", reply, sizeof(reply)) == 0, "LIST_SPEAKERS failed");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "LIST_SPEAKERS", reply, sizeof(reply)) == 0,
+                "LIST_SPEAKERS failed");
     printf("  Active remote speakers: %s", reply);
     ASSERT_TRUE(strstr(reply, "\"SPEAKER_1\"") != NULL && strstr(reply, "\"SPEAKER_2\"") != NULL,
                 "Expected SPEAKER_1 and SPEAKER_2 in speaker registry");
     ASSERT_TRUE(strstr(reply, "\"SPEAKER_3\"") == NULL,
                 "Expected only 2 remote speakers for the 2 remote voices");
 
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "LIST_SEGMENTS", reply, sizeof(reply)) == 0, "LIST_SEGMENTS failed");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "LIST_SEGMENTS", reply, sizeof(reply)) == 0,
+                "LIST_SEGMENTS failed");
     ASSERT_TRUE(strstr(reply, "\"speaker\":\"ME\"") != NULL, "Expected ME segments");
     ASSERT_TRUE(strstr(reply, "\"speaker\":\"SPEAKER_1\"") != NULL, "Expected SPEAKER_1 segments");
     ASSERT_TRUE(strstr(reply, "\"speaker\":\"SPEAKER_2\"") != NULL, "Expected SPEAKER_2 segments");
 
     /* 6. Test runtime configuration mutations via IPC */
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SET_KEYWORDS Bitrock, Ascolto, GNOME", reply, sizeof(reply)) == 0, "SET_KEYWORDS failed");
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SET_SENSITIVITY high", reply, sizeof(reply)) == 0, "SET_SENSITIVITY failed");
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SET_LANG en", reply, sizeof(reply)) == 0, "SET_LANG failed");
+    ASSERT_TRUE(
+        send_ipc_cmd(cfg.control_socket, "SET_KEYWORDS Bitrock, Ascolto, GNOME", reply, sizeof(reply)) == 0,
+        "SET_KEYWORDS failed");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SET_SENSITIVITY high", reply, sizeof(reply)) == 0,
+                "SET_SENSITIVITY failed");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SET_LANG en", reply, sizeof(reply)) == 0,
+                "SET_LANG failed");
 
     /* 7. Simulate Zoom closing the microphone -> auto-stop session */
     char md_path[512];
     snprintf(md_path, sizeof(md_path), "%s", core->current_md_path);
-    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SIM_MIC_ACTIVE 0 Zoom", reply, sizeof(reply)) == 0, "SIM_MIC_ACTIVE 0 failed");
-    ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL, "Expected auto transition to IDLE when mic closes");
+    ASSERT_TRUE(send_ipc_cmd(cfg.control_socket, "SIM_MIC_ACTIVE 0 Zoom", reply, sizeof(reply)) == 0,
+                "SIM_MIC_ACTIVE 0 failed");
+    ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL,
+                "Expected auto transition to IDLE when mic closes");
 
     /* 8. Verify generated Markdown transcript file on disk */
     struct stat st;
-    ASSERT_TRUE(stat(md_path, &st) == 0 && st.st_size > 200, "Generated Markdown transcript missing or empty");
+    ASSERT_TRUE(stat(md_path, &st) == 0 && st.st_size > 200,
+                "Generated Markdown transcript missing or empty");
     FILE *fp = fopen(md_path, "r");
     ASSERT_TRUE(fp != NULL, "Cannot open generated Markdown transcript");
     char md_content[8192];
     size_t nread = fread(md_content, 1, sizeof(md_content) - 1, fp);
     md_content[nread] = '\0';
     fclose(fp);
-    ASSERT_TRUE(strstr(md_content, "[ME]") != NULL &&
-                strstr(md_content, "[SPEAKER_1]") != NULL &&
-                strstr(md_content, "[SPEAKER_2]") != NULL,
+    ASSERT_TRUE(strstr(md_content, "[ME]") != NULL && strstr(md_content, "[SPEAKER_1]") != NULL &&
+                    strstr(md_content, "[SPEAKER_2]") != NULL,
                 "Markdown transcript missing speaker tags");
 
     /* 9. Verify observability event log */
-    ASSERT_TRUE(stat(cfg.telemetry_log, &st) == 0 && st.st_size > 200, "Telemetry JSONL log missing or empty");
+    ASSERT_TRUE(stat(cfg.telemetry_log, &st) == 0 && st.st_size > 200,
+                "Telemetry JSONL log missing or empty");
 
     ascolto_core_destroy(core);
     free(core);
@@ -338,40 +405,41 @@ static int test_live_pipewire_integration(void) {
     ASSERT_TRUE(rc == 0 && count >= 2, "PipeWire device enumeration returned fewer than 2 devices");
     printf("  Enumerated %zu audio devices via PipeWire:\n", count);
     for (size_t i = 0; i < count; i++) {
-        printf("    - [%s] id=%s name=%s desc=\"%s\"\n",
-               devs[i].is_monitor ? "SYS-MON" : "MIC-SRC",
+        printf("    - [%s] id=%s name=%s desc=\"%s\"\n", devs[i].is_monitor ? "SYS-MON" : "MIC-SRC",
                devs[i].id, devs[i].name, devs[i].description);
     }
 
     char active_app[128] = {0};
     bool mic_busy = ascolto_pipewire_check_mic_active(active_app, sizeof(active_app));
-    printf("  Current live PipeWire external mic state: %s (app='%s')\n",
-           mic_busy ? "ACTIVE" : "IDLE", active_app);
+    printf("  Current live PipeWire external mic state: %s (app='%s')\n", mic_busy ? "ACTIVE" : "IDLE",
+           active_app);
     printf("  -> PASS\n");
     return 0;
 }
 
 static int test_daemon_binary_and_cli_tool(void) {
-    printf("[TEST 6] Full daemon process (./bin/ascolto) + CLI controller (./bin/ascoltoctl) + GNOME AppIndicator...\n");
-    const char *sock = "/tmp/opencode/ascolto_daemon_test.sock";
+    printf("[TEST 6] Full daemon process (./bin/ascolto) + CLI controller (./bin/ascoltoctl) + GNOME "
+           "AppIndicator...\n");
+    const char *sock = test_path("ascolto_daemon_test.sock");
     unlink(sock);
 
-    int rc = system("./bin/ascolto --socket /tmp/opencode/ascolto_daemon_test.sock "
-                    "--output-dir /tmp/opencode/ascolto_daemon_transcripts "
-                    "--config /tmp/opencode/ascolto_daemon_config.ini "
-                    "--mock-audio >/tmp/opencode/ascolto_daemon.out 2>&1 &");
+    int rc = test_system("./bin/ascolto --socket /tmp/opencode/ascolto_daemon_test.sock "
+                         "--output-dir /tmp/opencode/ascolto_daemon_transcripts "
+                         "--config /tmp/opencode/ascolto_daemon_config.ini "
+                         "--mock-audio --headless >/tmp/opencode/ascolto_daemon.out 2>&1 &");
     ASSERT_TRUE(rc == 0, "Failed to launch ./bin/ascolto");
 
     /* Wait up to 3 seconds for socket to come online */
     for (int i = 0; i < 60; i++) {
-        if (access(sock, F_OK) == 0) break;
+        if (access(sock, F_OK) == 0)
+            break;
         struct timespec ts = {0, 50 * 1000 * 1000};
         nanosleep(&ts, NULL);
     }
     ASSERT_TRUE(access(sock, F_OK) == 0, "Daemon control socket did not appear");
 
     char out[4096];
-    FILE *fp = popen("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock GET_TRAY_STATE", "r");
+    FILE *fp = test_popen("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock GET_TRAY_STATE", "r");
     ASSERT_TRUE(fp != NULL, "popen ascoltoctl failed");
     size_t n = fread(out, 1, sizeof(out) - 1, fp);
     out[n] = '\0';
@@ -381,42 +449,53 @@ static int test_daemon_binary_and_cli_tool(void) {
                 "GET_TRAY_STATE failed via ascoltoctl");
 
     if (access("/usr/share/sounds/alsa/Front_Center.wav", R_OK) == 0) {
-        ASSERT_TRUE(system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock START >/dev/null") == 0, "START failed");
-        ASSERT_TRUE(system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock INJECT_WAV MIC /usr/share/sounds/alsa/Front_Center.wav >/dev/null") == 0,
+        ASSERT_TRUE(
+            test_system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock START >/dev/null") == 0,
+            "START failed");
+        ASSERT_TRUE(test_system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock INJECT_WAV MIC "
+                                "/usr/share/sounds/alsa/Front_Center.wav >/dev/null") == 0,
                     "INJECT_WAV MIC failed");
-        ASSERT_TRUE(system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock INJECT_WAV SYS /usr/share/sounds/alsa/Front_Left.wav >/dev/null") == 0,
+        ASSERT_TRUE(test_system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock INJECT_WAV SYS "
+                                "/usr/share/sounds/alsa/Front_Left.wav >/dev/null") == 0,
                     "INJECT_WAV SYS failed");
 
-        fp = popen("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock LIST_SEGMENTS", "r");
+        fp = test_popen("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock LIST_SEGMENTS", "r");
         ASSERT_TRUE(fp != NULL, "popen LIST_SEGMENTS failed");
         n = fread(out, 1, sizeof(out) - 1, fp);
         out[n] = '\0';
         pclose(fp);
         printf("  Transcribed real WAV segments: %s", out);
-        ASSERT_TRUE(strstr(out, "\"speaker\":\"ME\"") != NULL && strstr(out, "\"speaker\":\"SPEAKER_1\"") != NULL,
+        ASSERT_TRUE(strstr(out, "\"speaker\":\"ME\"") != NULL &&
+                        strstr(out, "\"speaker\":\"SPEAKER_1\"") != NULL,
                     "Expected ME and SPEAKER_1 from real WAV injection");
-        ASSERT_TRUE(system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock STOP >/dev/null") == 0, "STOP failed");
+        ASSERT_TRUE(
+            test_system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock STOP >/dev/null") == 0,
+            "STOP failed");
     }
 
-    ASSERT_TRUE(system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock QUIT >/dev/null") == 0, "QUIT failed");
+    ASSERT_TRUE(test_system("./bin/ascoltoctl -s /tmp/opencode/ascolto_daemon_test.sock QUIT >/dev/null") ==
+                    0,
+                "QUIT failed");
     printf("  -> PASS\n");
     return 0;
 }
 
 static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
-    printf("[TEST 7] Live PipeWire daemon repeated Start/Stop/Restart cycles + GNOME D-Bus GUI menu clicks...\n");
-    const char *sock = "/tmp/opencode/ascolto_live_gui.sock";
+    printf("[TEST 7] Live PipeWire daemon repeated Start/Stop/Restart cycles + GNOME D-Bus GUI menu "
+           "clicks...\n");
+    const char *sock = test_path("ascolto_live_gui.sock");
     unlink(sock);
 
     /* Launch real daemon with LIVE PipeWire audio backend (no --mock-audio) and GNOME GUI indicator */
-    int rc = system("./bin/ascolto --socket /tmp/opencode/ascolto_live_gui.sock "
-                    "--output-dir /tmp/opencode/ascolto_live_gui_transcripts "
-                    "--config /tmp/opencode/ascolto_live_gui_config.ini "
-                    "--no-auto-mic >/tmp/opencode/ascolto_live_gui.out 2>&1 &");
+    int rc = test_system("./bin/ascolto --socket /tmp/opencode/ascolto_live_gui.sock "
+                         "--output-dir /tmp/opencode/ascolto_live_gui_transcripts "
+                         "--config /tmp/opencode/ascolto_live_gui_config.ini "
+                         "--no-auto-mic >/tmp/opencode/ascolto_live_gui.out 2>&1 &");
     ASSERT_TRUE(rc == 0, "Failed to launch live ./bin/ascolto");
 
     for (int i = 0; i < 60; i++) {
-        if (access(sock, F_OK) == 0) break;
+        if (access(sock, F_OK) == 0)
+            break;
         struct timespec ts = {0, 50 * 1000 * 1000};
         nanosleep(&ts, NULL);
     }
@@ -428,7 +507,8 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
         ASSERT_TRUE(send_ipc_cmd(sock, "START", reply, sizeof(reply)) == 0, "START failed");
         char expected_sid[64];
         snprintf(expected_sid, sizeof(expected_sid), "\"session_id\":%d", cycle);
-        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL && strstr(reply, expected_sid) != NULL,
+        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL &&
+                        strstr(reply, expected_sid) != NULL,
                     "Expected RECORDING_MANUAL and incremented session_id");
 
         /* Let real PipeWire capture run for 150 ms */
@@ -439,7 +519,8 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
         ASSERT_TRUE(strstr(reply, "\"state\":\"PAUSED\"") != NULL, "Expected PAUSED state");
 
         ASSERT_TRUE(send_ipc_cmd(sock, "RESUME", reply, sizeof(reply)) == 0, "RESUME failed");
-        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL, "Expected RECORDING_MANUAL after RESUME");
+        ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL,
+                    "Expected RECORDING_MANUAL after RESUME");
 
         ASSERT_TRUE(send_ipc_cmd(sock, "STOP", reply, sizeof(reply)) == 0, "STOP failed");
         ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL, "Expected IDLE after STOP");
@@ -448,7 +529,8 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
 
     /* Test TOGGLE command (used by Desktop icon 1) */
     ASSERT_TRUE(send_ipc_cmd(sock, "TOGGLE", reply, sizeof(reply)) == 0, "TOGGLE 1 failed");
-    ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL && strstr(reply, "\"session_id\":4") != NULL,
+    ASSERT_TRUE(strstr(reply, "\"state\":\"RECORDING_MANUAL\"") != NULL &&
+                    strstr(reply, "\"session_id\":4") != NULL,
                 "Expected TOGGLE from IDLE to start session 4");
     ASSERT_TRUE(send_ipc_cmd(sock, "TOGGLE", reply, sizeof(reply)) == 0, "TOGGLE 2 failed");
     ASSERT_TRUE(strstr(reply, "\"state\":\"IDLE\"") != NULL,
@@ -462,7 +544,7 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
     ASSERT_TRUE(send_ipc_cmd(sock, "GET_TRAY_STATE", reply, sizeof(reply)) == 0, "GET_TRAY_STATE failed");
     printf("  Tray state after 4 sessions: %s", reply);
     ASSERT_TRUE(strstr(reply, "\"recent_files_count\":") != NULL &&
-                strstr(reply, "\"recent_files_count\":0") == NULL,
+                    strstr(reply, "\"recent_files_count\":0") == NULL,
                 "Expected recent_files_count > 0 in tray menu");
 
     ASSERT_TRUE(send_ipc_cmd(sock, "QUIT", reply, sizeof(reply)) == 0, "QUIT failed");
@@ -474,7 +556,7 @@ static int test_live_daemon_repeated_start_stop_and_gui_dbusmenu(void) {
 
 static int test_flac_recorder_roundtrip(void) {
     printf("[TEST 8] FLAC recorder round-trip (write, close, reopen, count samples)...\n");
-    const char *path = "/tmp/opencode/ascolto_test_rec.flac";
+    const char *path = test_path("ascolto_test_rec.flac");
     unlink(path);
     ascolto_audio_recorder_t *rec = ascolto_audio_recorder_open(path);
     ASSERT_TRUE(rec != NULL, "recorder open failed");
@@ -501,7 +583,8 @@ static int test_flac_recorder_roundtrip(void) {
     ASSERT_TRUE(avformat_find_stream_info(fmt, NULL) >= 0, "stream info failed");
     AVCodecParameters *par = fmt->streams[0]->codecpar;
     ASSERT_TRUE(par->codec_id == AV_CODEC_ID_FLAC && par->sample_rate == 16000 &&
-                par->ch_layout.nb_channels == 1, "unexpected flac parameters");
+                    par->ch_layout.nb_channels == 1,
+                "unexpected flac parameters");
     int64_t dur = fmt->streams[0]->duration;
     avformat_close_input(&fmt);
     ASSERT_TRUE(dur == (int64_t)total, "decoded sample count differs from written count");
@@ -509,23 +592,27 @@ static int test_flac_recorder_roundtrip(void) {
     return 0;
 }
 
-int main(void) {
-    mkdir("/tmp/opencode", 0755);
+int main(int argc, char **argv) {
+    bool live = argc > 1 && !strcmp(argv[1], "--live");
+    test_root = g_dir_make_tmp("ascolto-native-XXXXXX", NULL);
+    if (!test_root)
+        return 1;
+    test_paths = g_ptr_array_new_with_free_func(g_free);
     printf("=== ascolto Test Harness & Observability Suite ===\n\n");
 
-    int (*tests[])(void) = {
-        test_config_persistence,
-        test_whistle_engine_and_wav_io,
-        test_hybrid_speaker_diarization,
-        test_e2e_multispeaker_call_and_ipc_observability,
-        test_live_pipewire_integration,
-        test_daemon_binary_and_cli_tool,
-        test_live_daemon_repeated_start_stop_and_gui_dbusmenu,
-        test_flac_recorder_roundtrip
-    };
+    int (*tests[])(void) = {test_config_persistence,
+                            test_whistle_engine_and_wav_io,
+                            test_hybrid_speaker_diarization,
+                            test_e2e_multispeaker_call_and_ipc_observability,
+                            test_live_pipewire_integration,
+                            test_daemon_binary_and_cli_tool,
+                            test_live_daemon_repeated_start_stop_and_gui_dbusmenu,
+                            test_flac_recorder_roundtrip};
 
     size_t num_tests = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < num_tests; i++) {
+        if (!live && (i == 4 || i == 6))
+            continue;
         g_tests_run++;
         if (tests[i]() == 0) {
             g_tests_passed++;
@@ -536,5 +623,7 @@ int main(void) {
     }
 
     printf("\n=== ALL %d/%d TESTS PASSED ===\n", g_tests_passed, g_tests_run);
+    g_ptr_array_free(test_paths, TRUE);
+    g_free(test_root);
     return 0;
 }

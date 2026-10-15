@@ -8,10 +8,11 @@
 4. Optionally render a spoken version of the recap to MP3 with OpenAI TTS.
 
 Works on one per-call folder (<dir>/transcript.md, transcript.jsonl, mic.flac, sys.flac) and leaves
-transcript.md (cloud version), recap.md, recap.spoken.txt and, with --tts, recap.mp3 in it.
+transcript.cloud.md (the original transcript.md is preserved), recap.md, recap.spoken.txt and, with --tts, recap.mp3 in it.
 Needs OPENAI_API_KEY in the environment.
 """
 import argparse
+import signal
 import concurrent.futures as futures
 import difflib
 import json
@@ -23,6 +24,8 @@ import sys
 import tempfile
 import time
 import wave
+import sqlite3
+from providers import credential, recap as provider_recap
 
 import numpy as np
 import requests
@@ -205,7 +208,7 @@ def transcribe_chunk(session, key, model, language, prompt, wav_path):
         if resp.status_code in (429, 500, 502, 503, 504):
             time.sleep(2 ** attempt)
             continue
-        raise RuntimeError(f"STT HTTP {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError(f"STT HTTP {resp.status_code}")
     raise RuntimeError("STT failed after retries")
 
 
@@ -283,29 +286,27 @@ def run_claude(args, transcript):
     prompt = RECAP_PROMPT.format(lang=args.recap_lang, glossary=glossary, spoken=spoken,
                                 transcript=scrub(transcript))
     with tempfile.TemporaryDirectory() as wd:
-        for model in (args.claude_model, "sonnet"):
+        for model in (args.claude_model,):
             cmd = [exe, "-p", "--model", model, "--effort", "high", "--tools", "",
                    "--setting-sources", "", "--no-session-persistence", "--disable-slash-commands",
                    "--system-prompt", RECAP_SYSTEM]
             r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=wd, timeout=900)
             if r.returncode == 0 and r.stdout.strip():
                 return r.stdout.strip(), model
-            log(f"claude ({model}) failed: rc={r.returncode} {r.stderr.strip()[:300]}")
+            log(f"claude failed: rc={r.returncode}")
     raise RuntimeError("claude recap failed")
 
 
-def tts_mp3(key, text, out_path, lang, voice):
+def tts_mp3(key, text, out_path, lang, voice, model="gpt-4o-mini-tts"):
     resp = requests.post(f"{OPENAI}/audio/speech",
                          headers={"Authorization": f"Bearer {key}"},
-                         json={"model": "gpt-4o-mini-tts", "voice": voice, "input": scrub(text)[:3900],
+                         json={"model": model, "voice": voice, "input": scrub(text)[:3900],
                                "instructions": f"Speak natural {lang} with a calm, warm, professional male voice and clear articulation.",
                                "response_format": "mp3"},
                          timeout=300)
     if resp.status_code != 200:
-        raise RuntimeError(f"TTS HTTP {resp.status_code}: {resp.text[:300]}")
-    with open(out_path, "wb") as fh:
-        fh.write(resp.content)
-    os.chmod(out_path, 0o600)
+        raise RuntimeError(f"TTS HTTP {resp.status_code}")
+    atomic_write(out_path, resp.content)
 
 
 def get_openai_key():
@@ -336,8 +337,24 @@ def notify(title, body):
         pass
 
 
+def atomic_write(path, content):
+    binary = isinstance(content, bytes)
+    fd, temporary = tempfile.mkstemp(prefix=".ascolto-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "wb" if binary else "w") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--database")
+    ap.add_argument("--job-id", type=int)
     ap.add_argument("--dir", required=True, help="per-call folder")
     ap.add_argument("--language", default="it")
     ap.add_argument("--keywords", default="")
@@ -350,11 +367,35 @@ def main():
     ap.add_argument("--claude-model", default="opus")
     ap.add_argument("--flac2wav", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "flac2wav"))
     args = ap.parse_args()
+    if args.database and args.job_id:
+        def terminate_worker(signum, frame):
+            signal.signal(signum, signal.SIG_DFL)
+            # The daemon creates a dedicated session for each worker.
+            if os.getpgrp() == os.getpid():
+                os.killpg(os.getpgrp(), signum)
+            raise SystemExit(128 + signum)
+        signal.signal(signal.SIGTERM, terminate_worker)
     if args.language == "auto":
         args.language = None
 
-    key = get_openai_key()
-    if not key:
+    config = {"recap_provider": "claude", "recap_model": args.claude_model, "cloud_transcription": True,
+              "openai_credential": "env:OPENAI_API_KEY", "openrouter_credential": "env:OPENROUTER_API_KEY",
+              "opencode_path": "opencode", "tts_model": "gpt-4o-mini-tts"}
+    if args.database and args.job_id:
+        with sqlite3.connect(args.database) as db:
+            row = db.execute("SELECT snapshot FROM jobs WHERE id=?", (args.job_id,)).fetchone()
+            if not row:
+                raise RuntimeError("Job snapshot unavailable")
+            config.update(json.loads(row[0]))
+        args.stt_model = config["stt_model"]
+        args.voice = config["tts_voice"]
+        args.claude_model = config["recap_model"]
+    needs_audio = args.mp3_only or args.tts or config["cloud_transcription"]
+    try:
+        key = credential(config["openai_credential"]) if needs_audio else None
+    except RuntimeError:
+        key = None
+    if needs_audio and not key:
         log("OPENAI_API_KEY not in the environment and not resolvable from 1Password (locked or signed out?)")
         notify("Ascolto", "Recap saltato: chiave OpenAI non disponibile (sblocca 1Password)")
         return 1
@@ -366,7 +407,7 @@ def main():
         try:
             with open(spoken_path, encoding="utf-8") as fh:
                 spoken = fh.read().strip()
-            tts_mp3(key, spoken, mp3_path, args.tts_lang, args.voice)
+            tts_mp3(key, spoken, mp3_path, args.tts_lang, args.voice, config["tts_model"])
         except (OSError, RuntimeError) as exc:
             log(f"mp3 failed: {exc}")
             notify("Ascolto", f"MP3 non generato: {exc}"[:200])
@@ -376,7 +417,7 @@ def main():
         return 0
 
     mic_flac, sys_flac = os.path.join(d, "mic.flac"), os.path.join(d, "sys.flac")
-    if not os.path.exists(mic_flac) and not os.path.exists(sys_flac):
+    if config["cloud_transcription"] and not os.path.exists(mic_flac) and not os.path.exists(sys_flac):
         log(f"no FLAC files in {d}")
         return 1
 
@@ -385,52 +426,54 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:
             mic, sys_ = [], []
             seconds = 0.0
-            if os.path.exists(mic_flac):
+            if config["cloud_transcription"] and os.path.exists(mic_flac):
                 mic, dur = transcribe_channel(mic_flac, lambda s, e: "ME", args, key, tmp, "mic")
                 seconds += dur
-            if os.path.exists(sys_flac):
+            if config["cloud_transcription"] and os.path.exists(sys_flac):
                 sys_, dur = transcribe_channel(sys_flac, lambda s, e: speaker_for(whistle_sys, s, e), args, key, tmp, "sys")
                 seconds += dur
 
         mic = drop_echo(mic, sys_)
         lines = sorted(mic + sys_, key=lambda c: c["start"])
         transcript = "\n".join(f"[{fmt_time(c['start'])}] [{c['label']}]: {c['text']}" for c in lines)
+        if not config["cloud_transcription"]:
+            with open(os.path.join(d, "transcript.md"), encoding="utf-8") as stream:
+                transcript = stream.read()
         if not transcript:
             log("empty transcript, nothing to recap")
             notify("Ascolto", "Nessun parlato rilevato: recap non generato")
             return 0
 
-        recap, model = run_claude(args, transcript)
+        if config["recap_provider"] == "claude":
+            recap, model = run_claude(args, transcript)
+        else:
+            spoken_instructions = SPOKEN_INSTRUCTIONS.format(lang=args.tts_lang)
+            glossary = f"- Glossary: {args.keywords}\n" if args.keywords else ""
+            prompt = RECAP_PROMPT.format(lang=args.recap_lang, glossary=glossary,
+                                        spoken=spoken_instructions, transcript=scrub(transcript))
+            recap, model = provider_recap(config["recap_provider"], config["recap_model"], prompt, RECAP_SYSTEM, config)
         spoken = None
         if "---SPOKEN---" in recap:
             recap, spoken = (part.strip() for part in recap.split("---SPOKEN---", 1))
 
-        # All cloud steps that can fail are done: now replace the live transcript with the cloud one.
-        tmp_md = os.path.join(d, "transcript.md.tmp")
-        with open(tmp_md, "w", encoding="utf-8") as fh:
-            fh.write(f"# Trascrizione ({args.stt_model})\n\n---\n\n")
-            for c in lines:
-                fh.write(f"**[{fmt_time(c['start'])}] [{c['label']}]**: {c['text']}\n\n")
-        os.replace(tmp_md, os.path.join(d, "transcript.md"))
-        with open(os.path.join(d, "recap.md"), "w", encoding="utf-8") as fh:
-            fh.write(f"# Recap\n\n{recap}\n")
+        if config["cloud_transcription"]:
+            cloud_text = f"# Cloud transcript ({args.stt_model})\n\n"
+            cloud_text += "".join(f"**[{fmt_time(c['start'])}] [{c['label']}]**: {c['text']}\n\n" for c in lines)
+            atomic_write(os.path.join(d, "transcript.cloud.md"), cloud_text)
+        atomic_write(os.path.join(d, "recap.md"), f"# Recap\n\n{recap}\n")
         if spoken:
-            with open(spoken_path, "w", encoding="utf-8") as fh:
-                fh.write(spoken + "\n")
-        jsonl = os.path.join(d, "transcript.jsonl")
-        if os.path.exists(jsonl):
-            os.unlink(jsonl)
+            atomic_write(spoken_path, spoken + "\n")
         log(f"done: {len(lines)} segments, about ${seconds / 60 * STT_USD_PER_MIN:.3f} STT, recap by {model}")
 
         if args.tts and spoken:
-            tts_mp3(key, spoken, mp3_path, args.tts_lang, args.voice)
+            tts_mp3(key, spoken, mp3_path, args.tts_lang, args.voice, config["tts_model"])
             log("recap.mp3 written")
 
         notify("Ascolto", "Recap pronto: " + os.path.basename(d))
         return 0
     except Exception as exc:  # noqa: BLE001 - report any failure to the log and the user
-        log(f"failed: {exc}")
-        notify("Ascolto", f"Recap fallito: {exc}"[:200])
+        log(f"failed: {exc}" if isinstance(exc, RuntimeError) else f"failed: {type(exc).__name__}")
+        notify("Ascolto", "Recap failed. Check provider configuration and retry.")
         return 1
 
 

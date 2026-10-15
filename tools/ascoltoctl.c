@@ -30,7 +30,10 @@ int main(int argc, char **argv) {
     if (arg_idx >= argc || strcmp(argv[arg_idx], "-h") == 0 || strcmp(argv[arg_idx], "--help") == 0) {
         printf("Usage: %s [-s <socket_path>] <COMMAND> [ARGS...]\n\n"
                "Commands:\n"
-               "  STATUS\n"
+               "  STATUS | DIAGNOSTICS | GET_PROVIDER_STATUS\n"
+               "  OPEN_SETTINGS | GET_SETTINGS | UPDATE_SETTINGS <json>\n"
+               "  LIST_SESSIONS | LIST_JOBS | RETRY_JOB <id>\n"
+               "  GET_EVENTS [after_seq]\n"
                "  START | STOP | TOGGLE | PAUSE | RESUME\n"
                "  SET_AUTO_MIC <0|1>\n"
                "  SET_LANG <auto|it|en|es|fr|de|nl|pl>\n"
@@ -47,10 +50,12 @@ int main(int argc, char **argv) {
         return (arg_idx >= argc) ? 1 : 0;
     }
 
-    char cmd[2048] = {0};
+    char cmd[16384] = {0};
     size_t off = 0;
     for (int i = arg_idx; i < argc && off + 2 < sizeof(cmd); i++) {
-        off += (size_t)snprintf(cmd + off, sizeof(cmd) - off, "%s%s", (i > arg_idx) ? " " : "", argv[i]);
+        int written=snprintf(cmd+off,sizeof(cmd)-off,"%s%s",i>arg_idx?" ":"",argv[i]);
+        if(written<0||(size_t)written>=sizeof(cmd)-off-1){fprintf(stderr,"Command too long\n");return 1;}
+        off+=(size_t)written;
     }
     snprintf(cmd + off, sizeof(cmd) - off, "\n");
 

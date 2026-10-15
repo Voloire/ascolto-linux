@@ -63,20 +63,15 @@ MODE="${1:-app}"
 
 case "${MODE}" in
     daemon)
-        if is_running; then
-            STATUS_JSON="$("${CTL_BIN}" STATUS 2>/dev/null || true)"
-            if ! echo "${STATUS_JSON}" | grep -q '"state":"IDLE"'; then
-                "${CTL_BIN}" STOP >/dev/null 2>&1 || true
-                notify_user "Ascolto Demone" "Sessione corrente fermata. Demone in attesa automatica del microfono."
-            else
-                notify_user "Ascolto Demone Attivo" "Demone in esecuzione nella barra GNOME (Auto-Mic attivo)."
-            fi
-            exit 0
-        fi
+        if is_running; then exit 0; fi
         ensure_daemon_started
         notify_user "Ascolto Demone Avviato" "In ascolto automatico del microfono nella barra in alto di GNOME."
         ;;
-    app|toggle)
+    app|settings)
+        ensure_daemon_started
+        "${CTL_BIN}" OPEN_SETTINGS
+        ;;
+    toggle)
         ensure_daemon_started
         STATUS_JSON="$("${CTL_BIN}" STATUS 2>/dev/null || true)"
         if echo "${STATUS_JSON}" | grep -q '"state":"IDLE"'; then

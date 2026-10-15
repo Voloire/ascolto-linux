@@ -22,3 +22,6 @@ third_party/whistle/*.cact
 *.pid
 /tmp/
 .DS_Store
+
+__pycache__/
+*.pyc
